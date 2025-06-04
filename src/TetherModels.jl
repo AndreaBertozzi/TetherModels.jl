@@ -2,6 +2,8 @@ module TetherModels
 
 using LinearAlgebra, StaticArrays, ADTypes, NonlinearSolve, MAT, Parameters
 
+export simulate_tether, init_quasistatic
+
 const MVec3 = MVector{3, Float64}
 const SVec3 = SVector{3, Float64}
 # const segments = 15
