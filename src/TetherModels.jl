@@ -21,7 +21,7 @@ const SVec3 = SVector{3, Float64}
 #  Memory estimate: 41.20 KiB, allocs estimate: 971.
 
 """
-    Settings
+    TetherSettings
 
 Contains the environmental and tether properties
 
@@ -34,7 +34,7 @@ Contains the environmental and tether properties
   - c_spring::Float64: axial stiffness of the tether EA [N] 
 """ 
 
-@with_kw mutable struct Settings @deftype Float64
+@with_kw mutable struct TetherSettings @deftype Float64
     rho = 1.225
     g_earth::MVector{3, Float64} = [0.0, 0.0, -9.81]
     cd_tether = 0.958                            
@@ -55,7 +55,7 @@ Function to determine the tether shape and forces, based on a quasi-static model
 - kite_vel::MVector{3, Float64}: kite velocity vector in wind reference frame
 - wind_vel:: (3, segments) MMatrix{Float64} wind velocity vector in wind reference frame for each segment of the tether
 - tether_length: tether length
-- settings:: Settings struct containing environmental and tether parameters: see [Settings](@ref)
+- settings:: TetherSettings struct containing environmental and tether parameters: see [TetherSettings](@ref)
 
 # Returns
 - state_vec::MVector{3, Float64}: state vector (theta [rad], phi [rad], Tn [N]);  
@@ -109,7 +109,7 @@ and magnitude.
     - kite_vel::MVector{3, Float64} kite velocity vector in wind reference frame
     - wind_vel::MMatrix{Float64} wind velocity vector in wind reference frame for each segment of the tether
     - tether_length: tether length
-    - settings:: Settings struct containing environmental and tether parameters: see [Settings](@ref)
+    - settings:: TetherSettings struct containing environmental and tether parameters: see [TetherSettings](@ref)
     - buffers:: (5, ) Vector{Matrix{Float64}}  Vector of (3, segments) Matrix{Float64} empty matrices for preallocation
     - segments:: number of tether segments
     - return_result:: Boolean to determine use for in-place optimization or for calculating returns
@@ -126,7 +126,7 @@ kite_pos = [100, 100, 300]
 kite_vel = [0, 0, 0]
 wind_vel = rand(3,15)
 tether_length = 500
-settings = Settings(1.225, [0, 0, -9.806], 0.9, 4, 0.85, 500000)
+settings = TetherSettings(1.225, [0, 0, -9.806], 0.9, 4, 0.85, 500000)
 res!(res, state_vec, kite_pos, kite_vel, wind_vel, tether_length, settings)
 """
 function res!(res, state_vec, param)
@@ -301,7 +301,7 @@ Loads the initialization data for the basic examples and tests
 - kite_vel::MVector{3, Float64} kite velocity vector in wind reference frame
 - wind_vel::MMatrix{3, segments, Float64} wind velocity vector in wind reference frame for each segment of the tether
 - tether_length: Float64 tether length
-- settings::Settings struct containing environmental and tether parameters: see [Settings](@ref)
+- settings::TetherSettings struct containing environmental and tether parameters: see [TetherSettings](@ref)
 """
 function get_initial_conditions(filename)
     vars = matread(filename) 
@@ -323,7 +323,7 @@ function get_initial_conditions(filename)
     A = get(T, "A", 0)
     c_spring = E*A 
 
-    settings = Settings(rho_air, g_earth, cd_tether, d_tether, rho_tether, c_spring)
+    settings = TetherSettings(rho_air, g_earth, cd_tether, d_tether, rho_tether, c_spring)
 
     return state_vec, kite_pos, kite_vel, wind_vel, tether_length, settings
 end
@@ -339,7 +339,7 @@ Initialize the quasi-static tether model providing an initial guess for the stat
 - kite_vel::MVector{3, Float64} kite velocity vector in wind reference frame
 - segments::Int number of tether segments
 - wind_vel::MMatrix{3, segments, Float64} wind velocity vector in wind reference frame for each segment of the tether
-- settings::Settings struct containing environmental and tether parameters: see [Settings](@ref)
+- settings::TetherSettings struct containing environmental and tether parameters: see [TetherSettings](@ref)
 
 # Returns
 - state_vec::MVector{3, Float64} state vector (theta [rad], phi [rad], Tn [N])  
@@ -366,9 +366,9 @@ function init_quasistatic(kite_pos, tether_length; kite_vel = nothing, segments 
     end
 
     if isnothing(settings)
-        settings = Settings()
+        settings = TetherSettings()
     else
-        @assert typeof(settings) == Settings || error("settings should be of type Settings!")
+        @assert typeof(settings) == TetherSettings || error("settings should be of type TetherSettings!")
     end
 
     kite_dist = norm(kite_pos)
