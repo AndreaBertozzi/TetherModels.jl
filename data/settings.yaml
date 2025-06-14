@@ -11,15 +11,17 @@ system:
     fixed_font: ""                 # name or filepath+filename of alternative fixed pitch font, e.g. Liberation Mono
 
 initial:
-    elevation: 70.8               # initial elevation angle   [deg]
-    elevation_rate: 0.0           # initial elevation rate  [deg/s]
-    azimuth: 0.0                  # initial azimuth angle     [deg]
-    azimuth_rate: 0.0             # initial azimuth rate    [deg/s]
-    heading: 0.0                  # initial heading angle     [deg]
-    heading_rate: 0.0             # initial heading rate    [deg/s]
+    elevations: [70.8]               # initial elevation angle   [deg]
+    elevation_rates: [0.0]           # initial elevation rate  [deg/s]
+    azimuths: [0.0]                  # initial azimuth angle     [deg]
+    azimuth_rates: [0.0]             # initial azimuth rate    [deg/s]
+    headings: [0.0]                  # initial heading angle     [deg]
+    heading_rates: [0.0]             # initial heading rate    [deg/s]
     # three values are only needed for RamAirKite, for KPS3 and KPS4 use only the first value
-    l_tethers: [50.0, 0.0, 0.0]   # initial tether lengths      [m]
-    v_reel_outs: [0.0, 0.0, 0.0]  # initial reel out speeds   [m/s]
+    l_tethers: [50.0, 0.0, 0.0]      # initial tether lengths      [m]
+    v_reel_outs: [0.0, 0.0, 0.0]     # initial reel out speeds   [m/s]
+    depowers: [25.0]                 # initial depower settings    [%]
+    steerings: [0.0]                 # initial steering settings   [%]
 
 solver:
     abs_tol: 0.0006        # absolute tolerance of the DAE solver [m, m/s]
@@ -54,7 +56,7 @@ kite:
     cl_list:   [   0.0,    0.5,   0.0,  0.08, 0.125,  0.15,  0.2,  1.0,  1.0,  0.0,  -0.5,   0.0]
     alpha_cd:  [-180.0, -170.0, -140.0, -90.0, -20.0, 0.0, 20.0, 90.0, 140.0, 170.0, 180.0]
     cd_list:   [   0.5,    0.5,    0.5,   1.0,   0.2, 0.1,  0.2,  1.0,   0.5,   0.5,   0.5]
-  
+
 tether:
     d_tether:  4           # tether diameter                 [mm]
     cd_tether: 0.958       # drag coefficient of the tether

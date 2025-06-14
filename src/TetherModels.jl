@@ -1,6 +1,6 @@
 module TetherModels
 
-using LinearAlgebra, StaticArrays, ADTypes, NonlinearSolve, MAT, Parameters
+using LinearAlgebra, StaticArrays, ADTypes, NonlinearSolve, MAT, Parameters, KiteUtils
 
 export simulate_tether, init_quasistatic
 
@@ -26,8 +26,9 @@ const SVec3 = SVector{3, Float64}
 Contains the environmental and tether properties
 
 # Fields
-  - rho::Float64: density of air [kg/m³] 
+  - rho_air_0::Float64: density of air at ground level [kg/m³] 
   - g_earth::MVector{Float64}: gravitational acceleration [m/s]
+  - h_p::Float64 : scale height for density [m].
   - cd_tether::Float64: drag coefficient of the tether
   - d_tether::Float64: diameter of the tether [mm]
   - rho_tether::Float64: density of the tether (Dyneema) [kg/m³]
@@ -35,12 +36,26 @@ Contains the environmental and tether properties
 """ 
 
 @with_kw mutable struct TetherSettings @deftype Float64
-    rho = 1.225
+    rho_air_0 = 1.225
     g_earth::MVector{3, Float64} = [0.0, 0.0, -9.81]
+    h_p = 8.55e3
     cd_tether = 0.958                            
     d_tether = 4                                 
     rho_tether = 724                             
     c_spring = 614600                            
+end
+
+function tether_settings_from_settings(settings)
+    tether_settings             = TetherModels.TetherSettings()
+    # Environment
+    tether_settings.rho_air_0   = settings.rho_0
+    # Tether
+    tether_settings.cd_tether   = settings.cd_tether
+    tether_settings.d_tether    = settings.d_tether
+    tether_settings.rho_tether  = settings.rho_tether
+    tether_settings.c_spring    = settings.c_spring
+
+    return tether_settings   
 end
 
 """
@@ -54,8 +69,9 @@ Function to determine the tether shape and forces, based on a quasi-static model
 - kite_pos::MVector{3, Float64}: kite position vector in wind reference frame
 - kite_vel::MVector{3, Float64}: kite velocity vector in wind reference frame
 - wind_vel:: (3, segments) MMatrix{Float64} wind velocity vector in wind reference frame for each segment of the tether
-- tether_length: tether length
-- settings:: TetherSettings struct containing environmental and tether parameters: see [TetherSettings](@ref)
+- tether_length:: Float64: tether length
+- settings:: TetherSettings or Settings: struct containing environmental and tether parameters: see [TetherSettings](@ref)
+                or Settings in KiteUtils.jl
 
 # Returns
 - state_vec::MVector{3, Float64}: state vector (theta [rad], phi [rad], Tn [N]);  
@@ -66,6 +82,10 @@ Function to determine the tether shape and forces, based on a quasi-static model
 - p0::Vector{Float64}:  x,y,z - coordinates of the kite-tether attachment
 """
 function simulate_tether(state_vec, kite_pos, kite_vel, wind_vel, tether_length, settings; prn=false)
+    if typeof(settings) == Settings
+        settings = tether_settings_from_settings(settings)
+    end
+    
     segments = size(wind_vel)[2]
     buffers= [MMatrix{3, segments}(zeros(3, segments)), MMatrix{3, segments}(zeros(3, segments)), MMatrix{3, segments}(zeros(3, segments)), 
               MMatrix{3, segments}(zeros(3, segments)), MMatrix{3, segments}(zeros(3, segments))]
@@ -133,7 +153,6 @@ function res!(res, state_vec, param)
     kite_pos, kite_vel, wind_vel, tether_length, settings, buffers, segments, return_result = param
     g = abs(settings.g_earth[3])
     Ls = tether_length / (segments + 1)
-    drag_coeff = -0.5 * settings.rho * Ls * settings.d_tether * settings.cd_tether
     A = π/4 * (settings.d_tether/1000)^2
     mj = settings.rho_tether * Ls * A
     E = settings.c_spring / A
@@ -193,6 +212,7 @@ function res!(res, state_vec, param)
         v_a_p_n3 = v_a_p3 - v_a_p_t3
 
         norm_v_a_p_n = sqrt(v_a_p_n1^2 + v_a_p_n2^2 + v_a_p_n3^2)
+        drag_coeff = -0.5 * settings.rho_air_0 * Ls * settings.d_tether * settings.cd_tether
         coeff = drag_coeff * norm_v_a_p_n
 
         Fd[1, segments] = coeff * v_a_p_n1
@@ -255,6 +275,8 @@ function res!(res, state_vec, param)
             v_a_p_n3 = v_a_p3 - v_a_p_t3
 
             norm_v_a_p_n = sqrt(v_a_p_n1^2 + v_a_p_n2^2 + v_a_p_n3^2)
+            rho_at_height = calculate_rho_at_height(pj[3, ii-1], settings)
+            drag_coeff = -0.5 * rho_at_height * Ls * settings.d_tether * settings.cd_tether        
             coeff = drag_coeff * norm_v_a_p_n
 
             Fd[1, ii-1] = coeff * v_a_p_n1
@@ -339,7 +361,8 @@ Initialize the quasi-static tether model providing an initial guess for the stat
 - kite_vel::MVector{3, Float64} kite velocity vector in wind reference frame
 - segments::Int number of tether segments
 - wind_vel::MMatrix{3, segments, Float64} wind velocity vector in wind reference frame for each segment of the tether
-- settings::TetherSettings struct containing environmental and tether parameters: see [TetherSettings](@ref)
+- settings::TetherSettings or Settings: struct containing environmental and tether parameters: see [TetherSettings](@ref)
+                                        or Settings in KiteUtils.jl
 
 # Returns
 - state_vec::MVector{3, Float64} state vector (theta [rad], phi [rad], Tn [N])  
@@ -351,7 +374,6 @@ function init_quasistatic(kite_pos, tether_length; kite_vel = nothing, segments 
     if isnothing(kite_vel) 
         kite_vel = MVector{3}([0.0, 0.0, 0.0])
     end
-
     if isnothing(segments) && isnothing(wind_vel)
         segments = 7
         wind_vel = zeros(3, segments)
@@ -368,7 +390,11 @@ function init_quasistatic(kite_pos, tether_length; kite_vel = nothing, segments 
     if isnothing(settings)
         settings = TetherSettings()
     else
-        @assert typeof(settings) == TetherSettings || error("settings should be of type TetherSettings!")
+        @assert (typeof(settings) == TetherSettings || typeof(settings) == Settings) || error("settings should be of type TetherSettings or Settings (KiteUtils.jl)!")
+    end
+
+    if typeof(settings) == Settings
+        settings = tether_settings_from_settings(settings)
     end
 
     kite_dist = norm(kite_pos)
@@ -451,6 +477,15 @@ function transformFromWtoO(windDirection_rad,vec_W)
     M_OW = [cos(windDirection_rad) sin(windDirection_rad) 0; sin(windDirection_rad) -cos(windDirection_rad) 0; 0 0 -1]
     vec_O = M_OW*vec_W
     return vec_O
+end
+
+function calculate_rho_at_height(h, settings)
+    if h <=0
+        rho_at_height = settings.rho_air_0
+    else
+        rho_at_height = settings.rho_air_0*exp(-h/settings.h_p)
+    end
+    return rho_at_height
 end
 
 end
