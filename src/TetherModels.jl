@@ -212,7 +212,7 @@ function res!(res, state_vec, param)
         v_a_p_n3 = v_a_p3 - v_a_p_t3
 
         norm_v_a_p_n = sqrt(v_a_p_n1^2 + v_a_p_n2^2 + v_a_p_n3^2)
-        rho_at_height = calculate_rho_at_height(pj[3, 1])
+        rho_at_height = calculate_rho_at_height(pj[3, 1], settings)
         drag_coeff = -0.5 * rho_at_height * Ls * settings.d_tether * settings.cd_tether
         coeff = drag_coeff * norm_v_a_p_n
 
@@ -276,7 +276,7 @@ function res!(res, state_vec, param)
             v_a_p_n3 = v_a_p3 - v_a_p_t3
 
             norm_v_a_p_n = sqrt(v_a_p_n1^2 + v_a_p_n2^2 + v_a_p_n3^2)
-            rho_at_height = calculate_rho_at_height(pj[3, ii-1])
+            rho_at_height = calculate_rho_at_height(pj[3, ii-1], settings)
             drag_coeff = -0.5 * rho_at_height * Ls * settings.d_tether * settings.cd_tether        
             coeff = drag_coeff * norm_v_a_p_n
 
