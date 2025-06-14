@@ -55,6 +55,7 @@ function tether_settings_from_settings(settings)
 
     return tether_settings   
 end
+
 """
     simulate_tether(state_vec, kite_pos, kite_vel, wind_vel, tether_length, settings)
 
@@ -81,6 +82,7 @@ Function to determine the tether shape and forces, based on a quasi-static model
 function simulate_tether(state_vec, kite_pos, kite_vel, wind_vel, tether_length, settings; prn=false)
     if typeof(settings) == Settings
         settings = tether_settings_from_settings(settings)
+    end
     
     segments = size(wind_vel)[2]
     buffers= [MMatrix{3, segments}(zeros(3, segments)), MMatrix{3, segments}(zeros(3, segments)), MMatrix{3, segments}(zeros(3, segments)), 
@@ -389,6 +391,7 @@ function init_quasistatic(kite_pos, tether_length; kite_vel = nothing, segments 
 
     if typeof(settings) == Settings
         settings = tether_settings_from_settings(settings)
+    end
 
     kite_dist = norm(kite_pos)
 
