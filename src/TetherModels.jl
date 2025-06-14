@@ -1,6 +1,6 @@
 module TetherModels
 
-using LinearAlgebra, StaticArrays, ADTypes, NonlinearSolve, MAT, Parameters
+using LinearAlgebra, StaticArrays, ADTypes, NonlinearSolve, MAT, Parameters, KiteUtils
 
 export simulate_tether, init_quasistatic
 
