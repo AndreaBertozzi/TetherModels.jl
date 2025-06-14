@@ -54,6 +54,7 @@ function tether_settings_from_settings(settings)
     tether_settings.c_spring    = settings.c_spring
 
     return tether_settings   
+end
 """
     simulate_tether(state_vec, kite_pos, kite_vel, wind_vel, tether_length, settings)
 
