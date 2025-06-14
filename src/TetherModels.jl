@@ -476,3 +476,5 @@ function calculate_rho_at_height(h, settings)
     settings.rho_air_0*np.exp(-h/settings.h_p)
     return rho_at_height
 end
+
+end
