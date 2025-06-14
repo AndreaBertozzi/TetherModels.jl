@@ -386,7 +386,7 @@ function init_quasistatic(kite_pos, tether_length; kite_vel = nothing, segments 
     if isnothing(settings)
         settings = TetherSettings()
     else
-        @assert (typeof(settings) == TetherSettings || typeof(settings) == Settings) || error("settings should be of type TetherSettings!")
+        @assert (typeof(settings) == TetherSettings || typeof(settings) == Settings) || error("settings should be of type TetherSettings or Settings (KiteUtils.jl)!")
     end
 
     if typeof(settings) == Settings
