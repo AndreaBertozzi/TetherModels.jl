@@ -1,4 +1,5 @@
 module TetherModels
+# TODO: Implement clear interface 
 
 using LinearAlgebra, StaticArrays, ADTypes, NonlinearSolve, MAT, Parameters, KiteUtils
 
