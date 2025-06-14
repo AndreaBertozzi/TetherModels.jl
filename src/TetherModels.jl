@@ -28,6 +28,7 @@ Contains the environmental and tether properties
 # Fields
   - rho_air_0::Float64: density of air at ground level [kg/m³] 
   - g_earth::MVector{Float64}: gravitational acceleration [m/s]
+  - h_p::Float64 : scale height for density [m].
   - cd_tether::Float64: drag coefficient of the tether
   - d_tether::Float64: diameter of the tether [mm]
   - rho_tether::Float64: density of the tether (Dyneema) [kg/m³]
@@ -37,6 +38,7 @@ Contains the environmental and tether properties
 @with_kw mutable struct TetherSettings @deftype Float64
     rho_air_0 = 1.225
     g_earth::MVector{3, Float64} = [0.0, 0.0, -9.81]
+    h_p = 8.55e3
     cd_tether = 0.958                            
     d_tether = 4                                 
     rho_tether = 724                             
@@ -151,7 +153,6 @@ function res!(res, state_vec, param)
     kite_pos, kite_vel, wind_vel, tether_length, settings, buffers, segments, return_result = param
     g = abs(settings.g_earth[3])
     Ls = tether_length / (segments + 1)
-    drag_coeff = -0.5 * settings.rho_air_0 * Ls * settings.d_tether * settings.cd_tether
     A = π/4 * (settings.d_tether/1000)^2
     mj = settings.rho_tether * Ls * A
     E = settings.c_spring / A
@@ -211,6 +212,8 @@ function res!(res, state_vec, param)
         v_a_p_n3 = v_a_p3 - v_a_p_t3
 
         norm_v_a_p_n = sqrt(v_a_p_n1^2 + v_a_p_n2^2 + v_a_p_n3^2)
+        rho_at_height = calculate_rho_at_height(pj[3, 1])
+        drag_coeff = -0.5 * rho_at_height * Ls * settings.d_tether * settings.cd_tether
         coeff = drag_coeff * norm_v_a_p_n
 
         Fd[1, segments] = coeff * v_a_p_n1
@@ -273,6 +276,8 @@ function res!(res, state_vec, param)
             v_a_p_n3 = v_a_p3 - v_a_p_t3
 
             norm_v_a_p_n = sqrt(v_a_p_n1^2 + v_a_p_n2^2 + v_a_p_n3^2)
+            rho_at_height = calculate_rho_at_height(pj[3, ii-1])
+            drag_coeff = -0.5 * rho_at_height * Ls * settings.d_tether * settings.cd_tether        
             coeff = drag_coeff * norm_v_a_p_n
 
             Fd[1, ii-1] = coeff * v_a_p_n1
