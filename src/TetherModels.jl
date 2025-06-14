@@ -454,6 +454,7 @@ function transformFromWtoO(windDirection_rad,vec_W)
 end
 
 function calculate_rho_at_height(h, settings)
+    @assert h >= 0 || error("h should be positive!")
     settings.rho_air_0*np.exp(-h/settings.h_p)
     return rho_at_height
 end
