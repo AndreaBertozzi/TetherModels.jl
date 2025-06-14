@@ -212,8 +212,7 @@ function res!(res, state_vec, param)
         v_a_p_n3 = v_a_p3 - v_a_p_t3
 
         norm_v_a_p_n = sqrt(v_a_p_n1^2 + v_a_p_n2^2 + v_a_p_n3^2)
-        rho_at_height = calculate_rho_at_height(pj[3, 1], settings)
-        drag_coeff = -0.5 * rho_at_height * Ls * settings.d_tether * settings.cd_tether
+        drag_coeff = -0.5 * settings.rho_air_0 * Ls * settings.d_tether * settings.cd_tether
         coeff = drag_coeff * norm_v_a_p_n
 
         Fd[1, segments] = coeff * v_a_p_n1
@@ -481,8 +480,11 @@ function transformFromWtoO(windDirection_rad,vec_W)
 end
 
 function calculate_rho_at_height(h, settings)
-    @assert h >= 0 || error("h should be positive!")
-    rho_at_height = settings.rho_air_0*exp(-h/settings.h_p)
+    if h <=0
+        rho_at_height = settings.rho_air_0
+    else
+        rho_at_height = settings.rho_air_0*exp(-h/settings.h_p)
+    end
     return rho_at_height
 end
 
