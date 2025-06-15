@@ -6,13 +6,13 @@ tether_length = norm(kite_pos)*1.05
 
 set_data_path("data")
 settings = load_settings("system.yaml")
+settings.l_tether = norm(kite_pos)*1.05
+settings.segments = 100
 
-state_vec, kite_pos, kite_vel, wind_vel, tether_length, settings = init_quasistatic(kite_pos, tether_length, segments = 20, settings=settings)
-tether = Tether()
-tether.state_vec = state_vec
-tether.tether_length = tether_length
-tether.settings = settings
-tether.segments = 20
+state_vec, kite_pos, kite_vel, wind_vel, tether_length, settings = init_quasistatic(kite_pos, tether_length, segments = 10, set=settings)
+
+settings = tether_set_from_set(settings)
+tether = Tether(settings, state_vec = state_vec)
 
 v_wind_gnd = 0.0
 wind_dir = 0.0
