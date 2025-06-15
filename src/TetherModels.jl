@@ -3,7 +3,7 @@ module TetherModels
 
 using LinearAlgebra, StaticArrays, ADTypes, NonlinearSolve, MAT, Parameters, KiteUtils
 
-export simulate_tether, init_quasistatic
+export step!, init_quasistatic, Tether
 
 const MVec3 = MVector{3, Float64}
 const SVec3 = SVector{3, Float64}
@@ -47,7 +47,7 @@ Contains the environmental and tether properties
 end
 
 function tether_settings_from_settings(settings)
-    tether_settings             = TetherModels.TetherSettings()
+    tether_settings             = TetherSettings()
     # Environment
     tether_settings.rho_air_0   = settings.rho_0
     # Tether
@@ -59,8 +59,17 @@ function tether_settings_from_settings(settings)
     return tether_settings   
 end
 
+@with_kw mutable struct Tether
+    settings::TetherSettings = TetherSettings()
+    segments::Int = 20
+    tether_length::Float64 = 200.0
+    state_vec::MVector{3, Float64} = [0.0, 0.0, 0.0]
+    tether_pos::MMatrix{3, 20} = MMatrix{3, 20}(zeros(3, 20))
+    wind_matrix::MMatrix{3, 20} = MMatrix{3, 20}(zeros(3, 20))
+end
+
 """
-    simulate_tether(state_vec, kite_pos, kite_vel, wind_vel, tether_length, settings)
+    simulate_tether(state_vec, kite_pos, kite_vel, wind_matrix, tether_length, settings)
 
 Function to determine the tether shape and forces, based on a quasi-static model.
 
@@ -69,7 +78,7 @@ Function to determine the tether shape and forces, based on a quasi-static model
   tether orientation and tension at ground station
 - kite_pos::MVector{3, Float64}: kite position vector in wind reference frame
 - kite_vel::MVector{3, Float64}: kite velocity vector in wind reference frame
-- wind_vel:: (3, segments) MMatrix{Float64} wind velocity vector in wind reference frame for each segment of the tether
+- wind_matrix:: (3, segments) MMatrix{Float64} wind velocity vector in wind reference frame for each segment of the tether
 - tether_length:: Float64: tether length
 - settings:: TetherSettings or Settings: struct containing environmental and tether parameters: see [TetherSettings](@ref)
                 or Settings in KiteUtils.jl
@@ -82,36 +91,31 @@ Function to determine the tether shape and forces, based on a quasi-static model
 - force_kite::Vector{Float64}: force from the kite to the end of tether
 - p0::Vector{Float64}:  x,y,z - coordinates of the kite-tether attachment
 """
-function simulate_tether(state_vec, kite_pos, kite_vel, wind_vel, tether_length, settings; prn=false)
-    if typeof(settings) == Settings
-        settings = tether_settings_from_settings(settings)
-    end
+function step!(tether, kite_pos, kite_vel, v_wind_gnd, wind_dir; prn=false)
     
-    segments = size(wind_vel)[2]
-    buffers= [MMatrix{3, segments}(zeros(3, segments)), MMatrix{3, segments}(zeros(3, segments)), MMatrix{3, segments}(zeros(3, segments)), 
-              MMatrix{3, segments}(zeros(3, segments)), MMatrix{3, segments}(zeros(3, segments))]
+    buffers= [MMatrix{3, tether.segments}(zeros(3, tether.segments)), MMatrix{3, tether.segments}(zeros(3, tether.segments)),
+              MMatrix{3, tether.segments}(zeros(3, tether.segments)), MMatrix{3, tether.segments}(zeros(3, tether.segments)),
+              MMatrix{3, tether.segments}(zeros(3, tether.segments))]
     
     # Pack parameters in param named tuple - false sets res! for in-place solution
-    param = (kite_pos=kite_pos, kite_vel=kite_vel, wind_vel=wind_vel, 
-         tether_length=tether_length, settings=settings, buffers=buffers, segments = segments, 
+    param = (kite_pos=kite_pos, kite_vel=kite_vel, wind_matrix=tether.wind_matrix, 
+         tether_length=tether.tether_length, settings=tether.settings, buffers=buffers, segments = tether.segments, 
          return_result=false)
     # Define the nonlinear problem
-    prob = NonlinearProblem(res!, state_vec, param)
+    prob = NonlinearProblem(res!, tether.state_vec, param)
     # Solve the problem with TrustRegion method
     sol = solve(prob, TrustRegion(autodiff=AutoFiniteDiff()), show_trace=Val(false)) 
-
-    iterations = sol.stats.nsteps  # Field name may vary; verify with `propertynames(sol)`
-    state_vec = sol.u
+    
     if prn
+        iterations = sol.stats.nsteps  # Field name may vary; verify with `propertynames(sol)`
         println("Iterations: ", iterations)
     end
+    tether.state_vec = sol.u
     # Set the return_result to true so that res! returns outputs
     param = (; param..., return_result=true)
     res = MVector(0.0, 0, 0)
-    res, force_kite, tether_pos, p0 = res!(res, state_vec, param)
+    res, force_kite, tether.tether_pos, p0 = res!(res, tether.state_vec, param)
 
-    force_gnd = state_vec[3]
-    state_vec, tether_pos, force_gnd, force_kite, p0
 end
 
 
@@ -128,7 +132,7 @@ and magnitude.
 - par:: 7-elements tuple:
     - kite_pos::MVector{3, Float64} kite position vector in wind reference frame
     - kite_vel::MVector{3, Float64} kite velocity vector in wind reference frame
-    - wind_vel::MMatrix{Float64} wind velocity vector in wind reference frame for each segment of the tether
+    - wind_matrix::MMatrix{Float64} wind velocity vector in wind reference frame for each segment of the tether
     - tether_length: tether length
     - settings:: TetherSettings struct containing environmental and tether parameters: see [TetherSettings](@ref)
     - buffers:: (5, ) Vector{Matrix{Float64}}  Vector of (3, segments) Matrix{Float64} empty matrices for preallocation
@@ -145,13 +149,13 @@ and magnitude.
 state_vec = rand(3,)
 kite_pos = [100, 100, 300] 
 kite_vel = [0, 0, 0]
-wind_vel = rand(3,15)
+wind_matrix = rand(3,15)
 tether_length = 500
 settings = TetherSettings(1.225, [0, 0, -9.806], 0.9, 4, 0.85, 500000)
-res!(res, state_vec, kite_pos, kite_vel, wind_vel, tether_length, settings)
+res!(res, state_vec, kite_pos, kite_vel, wind_matrix, tether_length, settings)
 """
 function res!(res, state_vec, param)
-    kite_pos, kite_vel, wind_vel, tether_length, settings, buffers, segments, return_result = param
+    kite_pos, kite_vel, wind_matrix, tether_length, settings, buffers, segments, return_result = param
     g = abs(settings.g_earth[3])
     Ls = tether_length / (segments + 1)
     A = π/4 * (settings.d_tether/1000)^2
@@ -195,9 +199,9 @@ function res!(res, state_vec, param)
     aj[:, segments] .= b
 
     # Drag calculation for first element
-    v_a_p1 = vj[1, segments] - wind_vel[1, segments]
-    v_a_p2 = vj[2, segments] - wind_vel[2, segments]
-    v_a_p3 = vj[3, segments] - wind_vel[3, segments]
+    v_a_p1 = vj[1, segments] - wind_matrix[1, segments]
+    v_a_p2 = vj[2, segments] - wind_matrix[2, segments]
+    v_a_p3 = vj[3, segments] - wind_matrix[3, segments]
 
     if all(x -> abs(x) < 1e-3, (v_a_p1, v_a_p2, v_a_p3))
         Fd[:, segments] .= 0.0
@@ -251,9 +255,9 @@ function res!(res, state_vec, param)
         aj[:, ii-1] .= b
 
         # Drag calculations
-        v_a_p1 = vj[1, ii] - wind_vel[1, ii]
-        v_a_p2 = vj[2, ii] - wind_vel[2, ii]
-        v_a_p3 = vj[3, ii] - wind_vel[3, ii]
+        v_a_p1 = vj[1, ii] - wind_matrix[1, ii]
+        v_a_p2 = vj[2, ii] - wind_matrix[2, ii]
+        v_a_p3 = vj[3, ii] - wind_matrix[3, ii]
 
         if all(x -> abs(x) < 1e-3, (v_a_p1, v_a_p2, v_a_p3))
             Fd[:, ii-1] .= 0.0
@@ -322,7 +326,7 @@ Loads the initialization data for the basic examples and tests
   tether orientation and tension at ground station
 - kite_pos::MVector{3, Float64} kite position vector in wind reference frame
 - kite_vel::MVector{3, Float64} kite velocity vector in wind reference frame
-- wind_vel::MMatrix{3, segments, Float64} wind velocity vector in wind reference frame for each segment of the tether
+- wind_matrix::MMatrix{3, segments, Float64} wind velocity vector in wind reference frame for each segment of the tether
 - tether_length: Float64 tether length
 - settings::TetherSettings struct containing environmental and tether parameters: see [TetherSettings](@ref)
 """
@@ -331,7 +335,7 @@ function get_initial_conditions(filename)
     state_vec = MVector{3}(vec(get(vars,"stateVec", 0)))
     kite_pos = MVector{3}(vec(get(vars,"kitePos", 0)))
     kite_vel = MVector{3}(vec(get(vars,"kiteVel", 0)))
-    wind_vel = get(vars,"windVel", 0)
+    wind_matrix = get(vars,"windVel", 0)
     tether_length = get(vars,"tetherLength", 0)
 
     ENVMT = get(vars,"ENVMT", 0) 
@@ -348,11 +352,11 @@ function get_initial_conditions(filename)
 
     settings = TetherSettings(rho_air, g_earth, cd_tether, d_tether, rho_tether, c_spring)
 
-    return state_vec, kite_pos, kite_vel, wind_vel, tether_length, settings
+    return state_vec, kite_pos, kite_vel, wind_matrix, tether_length, settings
 end
 
 """
-    init_quasistatic(kite_pos, tether_length; kite_vel = nothing, segments = nothing, wind_vel = nothing, settings = nothing)
+    init_quasistatic(kite_pos, tether_length; kite_vel = nothing, segments = nothing, wind_matrix = nothing, settings = nothing)
 
 Initialize the quasi-static tether model providing an initial guess for the state vector based on the numerical solution of the catenary equation
 
@@ -361,7 +365,7 @@ Initialize the quasi-static tether model providing an initial guess for the stat
 - tether_length: Float64 tether length
 - kite_vel::MVector{3, Float64} kite velocity vector in wind reference frame
 - segments::Int number of tether segments
-- wind_vel::MMatrix{3, segments, Float64} wind velocity vector in wind reference frame for each segment of the tether
+- wind_matrix::MMatrix{3, segments, Float64} wind velocity vector in wind reference frame for each segment of the tether
 - settings::TetherSettings or Settings: struct containing environmental and tether parameters: see [TetherSettings](@ref)
                                         or Settings in KiteUtils.jl
 
@@ -369,23 +373,23 @@ Initialize the quasi-static tether model providing an initial guess for the stat
 - state_vec::MVector{3, Float64} state vector (theta [rad], phi [rad], Tn [N])  
   tether orientation and tension at ground station
 """
-function init_quasistatic(kite_pos, tether_length; kite_vel = nothing, segments = nothing, wind_vel = nothing, settings = nothing)
+function init_quasistatic(kite_pos, tether_length; kite_vel = nothing, segments = nothing, wind_matrix = nothing, settings = nothing)
     # Some basic checks
     @assert isa(kite_pos, MVector{3}) || error("kite_pos must be a MVector of size (3,1)")
     if isnothing(kite_vel) 
         kite_vel = MVector{3}([0.0, 0.0, 0.0])
     end
-    if isnothing(segments) && isnothing(wind_vel)
+    if isnothing(segments) && isnothing(wind_matrix)
         segments = 7
-        wind_vel = zeros(3, segments)
-    elseif isnothing(segments) && !isnothing(wind_vel)
-        @assert size(wind_vel)[1] == 3 || error("wind_vel should have 3 rows!")
-        segments = size(wind_vel)[2]
-    elseif !isnothing(segments) && isnothing(wind_vel)
-        wind_vel = zeros(3, segments)
-    elseif !isnothing(segments) || !isnothing(wind_vel)
-        @assert size(wind_vel)[1] == 3 || error("wind_vel should have 3 rows!")
-        @assert size(wind_vel)[2] == segments || error("wind_vel should have the same number of columns as segments!")
+        wind_matrix = zeros(3, segments)
+    elseif isnothing(segments) && !isnothing(wind_matrix)
+        @assert size(wind_matrix)[1] == 3 || error("wind_matrix should have 3 rows!")
+        segments = size(wind_matrix)[2]
+    elseif !isnothing(segments) && isnothing(wind_matrix)
+        wind_matrix = zeros(3, segments)
+    elseif !isnothing(segments) || !isnothing(wind_matrix)
+        @assert size(wind_matrix)[1] == 3 || error("wind_matrix should have 3 rows!")
+        @assert size(wind_matrix)[2] == segments || error("wind_matrix should have the same number of columns as segments!")
     end
 
     if isnothing(settings)
@@ -445,7 +449,7 @@ function init_quasistatic(kite_pos, tether_length; kite_vel = nothing, segments 
     # Assemble state vector
     state_vec = MVector{3}([theta_init, phi_init, tension])        
     
-    return state_vec, kite_pos, kite_vel, wind_vel, tether_length, settings
+    return state_vec, kite_pos, kite_vel, wind_matrix, tether_length, settings
 end
 
 """
