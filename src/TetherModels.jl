@@ -3,7 +3,7 @@ module TetherModels
 
 using LinearAlgebra, StaticArrays, ADTypes, NonlinearSolve, MAT, Parameters, KiteUtils
 
-export step!, init_quasistatic, Tether
+export step!, init_quasistatic, Tether, tether_set_from_set
 
 const MVec3 = MVector{3, Float64}
 const SVec3 = SVector{3, Float64}
@@ -27,7 +27,7 @@ const SVec3 = SVector{3, Float64}
 Contains the environmental and tether properties
 
 # Fields
-  - rho_air_0::Float64: density of air at ground level [kg/m³] 
+  - rho_0::Float64: density of air at ground level [kg/m³] 
   - g_earth::MVector{Float64}: gravitational acceleration [m/s]
   - h_p::Float64 : scale height for density [m].
   - cd_tether::Float64: drag coefficient of the tether
@@ -37,54 +37,54 @@ Contains the environmental and tether properties
 """ 
 
 @with_kw mutable struct TetherSettings @deftype Float64
-    rho_air_0 = 1.225
-    g_earth::MVec3 = [0.0, 0.0, -9.81]
+    rho_0 = 1.225
+    g_earth::MVec3 = MVec3(0.0, 0.0, -9.81)
     h_p = 8.55e3
     cd_tether = 0.958                            
     d_tether = 4                                 
     rho_tether = 724                             
-    c_spring = 614600                            
+    c_spring = 614600   
+    segments::Int = 10
+    l_tether = 100                         
 end
 
 function tether_set_from_set(set)
     tether_set             = TetherSettings()
     # Environment
-    tether_set.rho_air_0   = set.rho_0
+    tether_set.rho_0       = set.rho_0
     # Tether
     tether_set.cd_tether   = set.cd_tether
     tether_set.d_tether    = set.d_tether
     tether_set.rho_tether  = set.rho_tether
     tether_set.c_spring    = set.c_spring
+    tether_set.segments    = set.segments
+    tether_set.l_tether    = set.l_tether
+    
 
     return tether_set   
 end
 
 mutable struct Tether{N}
     set::TetherSettings
-    segments::Int
-    tether_length::Float64
-    state_vec::MVector{3, Float64}
+    state_vec::MVec3
     tether_pos::MMatrix{3, N}
     wind_matrix::MMatrix{3, N}
 
     function Tether{N}(set::TetherSettings;
-                       tether_length::Float64 = 200.0,
-                       state_vec::MVector{3, Float64} = MVector{3}(0.0, 0.0, 0.0)) where {N}
+                       state_vec::MVec3 = MVector{3}(0.0, 0.0, 0.0)) where {N}
         tether_pos = MMatrix{3, N}(zeros(3, N))
         wind_matrix = MMatrix{3, N}(zeros(3, N))
-        new(set, N, tether_length, state_vec, tether_pos, wind_matrix)
+        new(set, state_vec, tether_pos, wind_matrix)
     end
 end
 
-function Tether(; set::TetherSettings,
-                segments::Int = 20,
-                tether_length::Float64 = 200.0,
-                state_vec::MVector{3, Float64} = MVector{3}(0.0, 0.0, 0.0))
-    Tether{segments}(set; tether_length, state_vec)
+function Tether(set::TetherSettings;
+                state_vec::MVec3 = MVector{3}(0.0, 0.0, 0.0))
+    Tether{set.segments}(set; state_vec)
 end
 
 """
-    simulate_tether(state_vec, kite_pos, kite_vel, wind_matrix, tether_length, set)
+    simulate_tether(state_vec, kite_pos, kite_vel, wind_matrix, l_tether, set)
 
 Function to determine the tether shape and forces, based on a quasi-static model.
 
@@ -94,7 +94,7 @@ Function to determine the tether shape and forces, based on a quasi-static model
 - kite_pos::MVector{3, Float64}: kite position vector in wind reference frame
 - kite_vel::MVector{3, Float64}: kite velocity vector in wind reference frame
 - wind_matrix:: (3, segments) MMatrix{Float64} wind velocity vector in wind reference frame for each segment of the tether
-- tether_length:: Float64: tether length
+- l_tether:: Float64: tether length
 - set:: TetherSettings or Settings: struct containing environmental and tether parameters: see [TetherSettings](@ref)
                 or Settings in KiteUtils.jl
 
@@ -108,14 +108,13 @@ Function to determine the tether shape and forces, based on a quasi-static model
 """
 function step!(tether, kite_pos, kite_vel, v_wind_gnd, wind_dir; prn=false)
     
-    buffers= [MMatrix{3, tether.segments}(zeros(3, tether.segments)), MMatrix{3, tether.segments}(zeros(3, tether.segments)),
-              MMatrix{3, tether.segments}(zeros(3, tether.segments)), MMatrix{3, tether.segments}(zeros(3, tether.segments)),
-              MMatrix{3, tether.segments}(zeros(3, tether.segments))]
+    buffers= [MMatrix{3, tether.set.segments}(zeros(3, tether.set.segments)), MMatrix{3, tether.set.segments}(zeros(3, tether.set.segments)),
+              MMatrix{3, tether.set.segments}(zeros(3, tether.set.segments)), MMatrix{3, tether.set.segments}(zeros(3, tether.set.segments)),
+              MMatrix{3, tether.set.segments}(zeros(3, tether.set.segments))]
     
     # Pack parameters in param named tuple - false sets res! for in-place solution
     param = (kite_pos=kite_pos, kite_vel=kite_vel, wind_matrix=tether.wind_matrix, 
-         tether_length=tether.tether_length, set=tether.set, buffers=buffers, segments = tether.segments, 
-         return_result=false)
+             set=tether.set, buffers=buffers, return_result=false)
     # Define the nonlinear problem
     prob = NonlinearProblem(res!, tether.state_vec, param)
     # Solve the problem with TrustRegion method
@@ -148,7 +147,7 @@ and magnitude.
     - kite_pos::MVector{3, Float64} kite position vector in wind reference frame
     - kite_vel::MVector{3, Float64} kite velocity vector in wind reference frame
     - wind_matrix::MMatrix{Float64} wind velocity vector in wind reference frame for each segment of the tether
-    - tether_length: tether length
+    - l_tether: tether length
     - set:: TetherSettings struct containing environmental and tether parameters: see [TetherSettings](@ref)
     - buffers:: (5, ) Vector{Matrix{Float64}}  Vector of (3, segments) Matrix{Float64} empty matrices for preallocation
     - segments:: number of tether segments
@@ -165,14 +164,14 @@ state_vec = rand(3,)
 kite_pos = [100, 100, 300] 
 kite_vel = [0, 0, 0]
 wind_matrix = rand(3,15)
-tether_length = 500
+l_tether = 500
 set = TetherSettings(1.225, [0, 0, -9.806], 0.9, 4, 0.85, 500000)
-res!(res, state_vec, kite_pos, kite_vel, wind_matrix, tether_length, set)
+res!(res, state_vec, kite_pos, kite_vel, wind_matrix, l_tether, set)
 """
 function res!(res, state_vec, param)
-    kite_pos, kite_vel, wind_matrix, tether_length, set, buffers, segments, return_result = param
+    kite_pos, kite_vel, wind_matrix, set, buffers, return_result = param
     g = abs(set.g_earth[3])
-    Ls = tether_length / (segments + 1)
+    Ls = set.l_tether / (set.segments + 1)
     A = π/4 * (set.d_tether/1000)^2
     mj = set.rho_tether * Ls * A
     E = set.c_spring / A
@@ -197,31 +196,30 @@ function res!(res, state_vec, param)
     v_parallel = dot(kite_vel, p_unit)
     
     # First element calculations
-    FT[1, segments] = Tn * cosθ * cosφ # cos(elevation)cos(azimuth)
-    FT[2, segments] = Tn * cosθ * sinφ # cos(elevation)sin(azimuth)
-    FT[3, segments] = Tn * sinθ        # sin(elevation)
+    FT[1, set.segments] = Tn * cosθ * cosφ # cos(elevation)cos(azimuth)
+    FT[2, set.segments] = Tn * cosθ * sinφ # cos(elevation)sin(azimuth)
+    FT[3, set.segments] = Tn * sinθ        # sin(elevation)
 
-    pj[1, segments] = Ls * cosθ * cosφ
-    pj[2, segments] = Ls * cosθ * sinφ
-    pj[3, segments] = Ls * sinθ
-
+    pj[1, set.segments] = Ls * cosθ * cosφ
+    pj[2, set.segments] = Ls * cosθ * sinφ
+    pj[3, set.segments] = Ls * sinθ
 
     # Velocity and acceleration calculations
     ω = cross(kite_pos / norm_p^2, kite_vel)
-    a = cross(ω, SVec3(pj[:, segments]))         
-    b = cross(ω, cross(ω, SVec3(pj[:, segments])))
-    vj[:, segments] .= v_parallel * p_unit + a
-    aj[:, segments] .= b
+    a = cross(ω, SVec3(pj[:, set.segments]))         
+    b = cross(ω, cross(ω, SVec3(pj[:, set.segments])))
+    vj[:, set.segments] .= v_parallel * p_unit + a
+    aj[:, set.segments] .= b
 
     # Drag calculation for first element
-    v_a_p1 = vj[1, segments] - wind_matrix[1, segments]
-    v_a_p2 = vj[2, segments] - wind_matrix[2, segments]
-    v_a_p3 = vj[3, segments] - wind_matrix[3, segments]
+    v_a_p1 = vj[1, set.segments] - wind_matrix[1, set.segments]
+    v_a_p2 = vj[2, set.segments] - wind_matrix[2, set.segments]
+    v_a_p3 = vj[3, set.segments] - wind_matrix[3, set.segments]
 
     if all(x -> abs(x) < 1e-3, (v_a_p1, v_a_p2, v_a_p3))
-        Fd[:, segments] .= 0.0
+        Fd[:, set.segments] .= 0.0
     else
-        dir1, dir2, dir3 = pj[1, segments]/Ls, pj[2, segments]/Ls, pj[3, segments]/Ls
+        dir1, dir2, dir3 = pj[1, set.segments]/Ls, pj[2, set.segments]/Ls, pj[3, set.segments]/Ls
         v_dot_dir = v_a_p1*dir1 + v_a_p2*dir2 + v_a_p3*dir3
         v_a_p_t1 = v_dot_dir * dir1
         v_a_p_t2 = v_dot_dir * dir2
@@ -232,18 +230,18 @@ function res!(res, state_vec, param)
         v_a_p_n3 = v_a_p3 - v_a_p_t3
 
         norm_v_a_p_n = sqrt(v_a_p_n1^2 + v_a_p_n2^2 + v_a_p_n3^2)
-        drag_coeff = -0.5 * set.rho_air_0 * Ls * set.d_tether * set.cd_tether
+        drag_coeff = -0.5 * set.rho_0 * Ls * set.d_tether * set.cd_tether
         coeff = drag_coeff * norm_v_a_p_n
 
-        Fd[1, segments] = coeff * v_a_p_n1
-        Fd[2, segments] = coeff * v_a_p_n2
-        Fd[3, segments] = coeff * v_a_p_n3
+        Fd[1, set.segments] = coeff * v_a_p_n1
+        Fd[2, set.segments] = coeff * v_a_p_n2
+        Fd[3, set.segments] = coeff * v_a_p_n3
     end
 
     # Process other segments
-    @inbounds for ii in segments:-1:2
+    @inbounds for ii in set.segments:-1:2
         # Tension force calculations
-        if ii == segments
+        if ii == set.segments
             mj_total = 1.5mj
             g_term = mj_total * g
         else
@@ -342,7 +340,7 @@ Loads the initialization data for the basic examples and tests
 - kite_pos::MVector{3, Float64} kite position vector in wind reference frame
 - kite_vel::MVector{3, Float64} kite velocity vector in wind reference frame
 - wind_matrix::MMatrix{3, segments, Float64} wind velocity vector in wind reference frame for each segment of the tether
-- tether_length: Float64 tether length
+- l_tether: Float64 tether length
 - set::TetherSettings struct containing environmental and tether parameters: see [TetherSettings](@ref)
 """
 function get_initial_conditions(filename)
@@ -351,7 +349,7 @@ function get_initial_conditions(filename)
     kite_pos = MVector{3}(vec(get(vars,"kitePos", 0)))
     kite_vel = MVector{3}(vec(get(vars,"kiteVel", 0)))
     wind_matrix = get(vars,"windVel", 0)
-    tether_length = get(vars,"tetherLength", 0)
+    l_tether = get(vars,"tetherLength", 0)
 
     ENVMT = get(vars,"ENVMT", 0) 
     rho_air = get(ENVMT, "rhos", 0) 
@@ -367,17 +365,17 @@ function get_initial_conditions(filename)
 
     set = TetherSettings(rho_air, g_earth, cd_tether, d_tether, rho_tether, c_spring)
 
-    return state_vec, kite_pos, kite_vel, wind_matrix, tether_length, set
+    return state_vec, kite_pos, kite_vel, wind_matrix, l_tether, set
 end
 
 """
-    init_quasistatic(kite_pos, tether_length; kite_vel = nothing, segments = nothing, wind_matrix = nothing, set = nothing)
+    init_quasistatic(kite_pos, l_tether; kite_vel = nothing, segments = nothing, wind_matrix = nothing, set = nothing)
 
 Initialize the quasi-static tether model providing an initial guess for the state vector based on the numerical solution of the catenary equation
 
 # Arguments
 - kite_pos::MVector{3, Float64} kite position vector in wind reference frame
-- tether_length: Float64 tether length
+- l_tether: Float64 tether length
 - kite_vel::MVector{3, Float64} kite velocity vector in wind reference frame
 - segments::Int number of tether segments
 - wind_matrix::MMatrix{3, segments, Float64} wind velocity vector in wind reference frame for each segment of the tether
@@ -388,7 +386,7 @@ Initialize the quasi-static tether model providing an initial guess for the stat
 - state_vec::MVector{3, Float64} state vector (theta [rad], phi [rad], Tn [N])  
   tether orientation and tension at ground station
 """
-function init_quasistatic(kite_pos, tether_length; kite_vel = nothing, segments = nothing, wind_matrix = nothing, set = nothing)
+function init_quasistatic(kite_pos, l_tether; kite_vel = nothing, segments = nothing, wind_matrix = nothing, set = nothing)
     # Some basic checks
     @assert isa(kite_pos, MVector{3}) || error("kite_pos must be a MVector of size (3,1)")
     if isnothing(kite_vel) 
@@ -413,10 +411,6 @@ function init_quasistatic(kite_pos, tether_length; kite_vel = nothing, segments 
         @assert (typeof(set) == TetherSettings || typeof(set) == Settings) || error("set should be of type TetherSettings or Settings (KiteUtils.jl)!")
     end
 
-    if typeof(set) == Settings
-        set = tether_set_from_set(set)
-    end
-
     kite_dist = norm(kite_pos)
 
     # azimuth angle calculation
@@ -424,21 +418,21 @@ function init_quasistatic(kite_pos, tether_length; kite_vel = nothing, segments 
     
     # tension definition
     tension = 0.0002*set.c_spring
-    function solve_catenary(kite_pos, tether_length, segments)  
+    function solve_catenary(kite_pos, l_tether, segments)  
         hvec = kite_pos[1:2]    
         h = norm(hvec)
         v = kite_pos[3]
     
         # Function for nonlinear solver
         function f!(res, coeff, param)    
-            tether_length, v, h = param  
-            res[] = sqrt(tether_length^2 - v^2) - (2 * sinh(coeff[] * h / 2) / coeff[])       
+            l_tether, v, h = param  
+            res[] = sqrt(l_tether^2 - v^2) - (2 * sinh(coeff[] * h / 2) / coeff[])       
         end
     
         u0 = [0.1]  # Initial guess as a scalar in an array
     
         # Define and solve nonlinear problem
-        param = (tether_length, v, h)
+        param = (l_tether, v, h)
         prob = NonlinearProblem(f!, u0, param)
         coeff = solve(prob, NewtonRaphson(autodiff=AutoFiniteDiff()), show_trace=Val(false)) 
         coeff_val = coeff[]  # Extract scalar value
@@ -447,7 +441,7 @@ function init_quasistatic(kite_pos, tether_length; kite_vel = nothing, segments 
         X = LinRange(0, h, segments)
         angle1 = atan(hvec[1], hvec[2])
         XY = [sin(angle1) * X'; cos(angle1) * X']
-        x_min = -(1 / 2) * (log((tether_length + v) / (tether_length - v)) / coeff_val - h)
+        x_min = -(1 / 2) * (log((l_tether + v) / (l_tether - v)) / coeff_val - h)
         bias = -cosh(-x_min * coeff_val) / coeff_val    
         # Compute z-coordinates of catenary
         z_catenary = cosh.((X .- x_min) .* coeff_val) ./ coeff_val .+ bias
@@ -457,14 +451,14 @@ function init_quasistatic(kite_pos, tether_length; kite_vel = nothing, segments 
     end
 
     # Solve the catenary equation
-    x_catenary, y_catenary, z_catenary = solve_catenary(kite_pos, tether_length, segments)  
+    x_catenary, y_catenary, z_catenary = solve_catenary(kite_pos, l_tether, segments)  
     # Calculate the elevation angle
     theta_init = atan(z_catenary[2], sqrt(x_catenary[2]^2 + y_catenary[2]^2))    
 
     # Assemble state vector
     state_vec = MVector{3}([theta_init, phi_init, tension])        
     
-    return state_vec, kite_pos, kite_vel, wind_matrix, tether_length, set
+    return state_vec, kite_pos, kite_vel, wind_matrix, l_tether, set
 end
 
 """
@@ -501,9 +495,9 @@ end
 
 function calculate_rho_at_height(h, set)
     if h <=0
-        rho_at_height = set.rho_air_0
+        rho_at_height = set.rho_0
     else
-        rho_at_height = set.rho_air_0*exp(-h/set.h_p)
+        rho_at_height = set.rho_0*exp(-h/set.h_p)
     end
     return rho_at_height
 end
