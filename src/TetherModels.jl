@@ -38,7 +38,7 @@ Contains the environmental and tether properties
 
 @with_kw mutable struct TetherSettings @deftype Float64
     rho_air_0 = 1.225
-    g_earth::MVector{3, Float64} = [0.0, 0.0, -9.81]
+    g_earth::MVec3 = [0.0, 0.0, -9.81]
     h_p = 8.55e3
     cd_tether = 0.958                            
     d_tether = 4                                 
@@ -59,19 +59,28 @@ function tether_set_from_set(set)
     return tether_set   
 end
 
-@with_kw mutable struct Tether
+mutable struct Tether{N}
     set::TetherSettings
-    segments::Int = 20
-    tether_length::Float64 = 200.0
-    state_vec::MVector{3, Float64} = MVector{3, Float64}(0.0, 0.0, 0.0)
-    tether_pos::MMatrix{3, 20}
-    wind_matrix::MMatrix{3, 20}
+    segments::Int
+    tether_length::Float64
+    state_vec::MVector{3, Float64}
+    tether_pos::MMatrix{3, N}
+    wind_matrix::MMatrix{3, N}
 
-    function Tether(setting::TetherSettings; segments::Int, tether_length::Float64)
-        tether_pos = MMatrix{3, segments}(zeros(3, segments))
-        wind_matrix = MMatrix{3, segments}(zeros(3, segments))
-        new(set, segments, tether_length, tether_pos, wind_matrix)
+    function Tether{N}(set::TetherSettings;
+                       tether_length::Float64 = 200.0,
+                       state_vec::MVector{3, Float64} = MVector{3}(0.0, 0.0, 0.0)) where {N}
+        tether_pos = MMatrix{3, N}(zeros(3, N))
+        wind_matrix = MMatrix{3, N}(zeros(3, N))
+        new(set, N, tether_length, state_vec, tether_pos, wind_matrix)
     end
+end
+
+function Tether(; set::TetherSettings,
+                segments::Int = 20,
+                tether_length::Float64 = 200.0,
+                state_vec::MVector{3, Float64} = MVector{3}(0.0, 0.0, 0.0))
+    Tether{segments}(set; tether_length, state_vec)
 end
 
 """
