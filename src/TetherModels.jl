@@ -425,3 +425,5 @@ function update_wind_matrix!(tether::Tether, v_wind_gnd, wind_dir)
         tether.wind_matrix[2, i] = v
     end       
 end
+
+end
