@@ -1,12 +1,13 @@
 module TetherModels
 # TODO: Implement clear interface 
 
-using LinearAlgebra, StaticArrays, ADTypes, NonlinearSolve, MAT, Parameters, KiteUtils
+using LinearAlgebra, StaticArrays, ADTypes, NonlinearSolve, MAT, Parameters, KiteUtils, AtmosphericModels
 
 export step!, init_quasistatic, Tether, tether_set_from_set
 
 const MVec3 = MVector{3, Float64}
 const SVec3 = SVector{3, Float64}
+const GRAV_ACC = SVec3(0.0, 0.0, -9.81)
 # const segments = 15
 
 # Iterations: 36
@@ -28,7 +29,6 @@ Contains the environmental and tether properties
 
 # Fields
   - rho_0::Float64: density of air at ground level [kg/m³] 
-  - g_earth::MVector{Float64}: gravitational acceleration [m/s]
   - h_p::Float64 : scale height for density [m].
   - cd_tether::Float64: drag coefficient of the tether
   - d_tether::Float64: diameter of the tether [mm]
@@ -38,7 +38,6 @@ Contains the environmental and tether properties
 
 @with_kw mutable struct TetherSettings @deftype Float64
     rho_0 = 1.225
-    g_earth::MVec3 = MVec3(0.0, 0.0, -9.81)
     h_p = 8.55e3
     cd_tether = 0.958                            
     d_tether = 4                                 
@@ -170,7 +169,7 @@ res!(res, state_vec, kite_pos, kite_vel, wind_matrix, l_tether, set)
 """
 function res!(res, state_vec, param)
     kite_pos, kite_vel, wind_matrix, set, buffers, return_result = param
-    g = abs(set.g_earth[3])
+    g = abs(GRAV_ACC[3])
     Ls = set.l_tether / (set.segments + 1)
     A = π/4 * (set.d_tether/1000)^2
     mj = set.rho_tether * Ls * A
@@ -363,7 +362,7 @@ function get_initial_conditions(filename)
     A = get(T, "A", 0)
     c_spring = E*A 
 
-    set = TetherSettings(rho_air, g_earth, cd_tether, d_tether, rho_tether, c_spring)
+    set = TetherSettings(rho_air, cd_tether, d_tether, rho_tether, c_spring)
 
     return state_vec, kite_pos, kite_vel, wind_matrix, l_tether, set
 end
