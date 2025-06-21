@@ -42,70 +42,116 @@ function Tether(set::Settings, am::AtmosphericModel;
 end
 
 """
-    update_wind_matrix!(tether::Tether)
+    init_tether!(tether, kite_pos; kite_vel=nothing)
 
-Updates the wind velocity components in the `tether.wind_matrix` for each segment in the tether.
-
-The function computes the wind velocity (`v_wind`) based on the height of each tether segment and 
-adjusts the horizontal wind components (`u` and `v`) based on a given wind direction (`wind_dir`). 
-
-The wind velocity is calculated differently depending on the height of each tether segment:
-- If the height is positive, `v_wind` is computed using the `calc_wind_factor` function,
-    which factors in the tether's properties and wind profile.
-- If the height is zero or negative, the wind velocity is assumed to be constant (`v_wind_gnd`).
+Initializes the tether system by computing the catenary shape of the tether based on the kite's position 
+and updating the tether's state, including its position, angles, and initial tension.
 
 # Arguments
-- `tether::Tether`: A `Tether` object
+- tether::Tether: A Tether object that contains the settings, state, and position of the tether.
+- kite_pos::MVector{3}: The position of the kite in the wind reference frame as a 3D vector (x, y, z).
+- kite_vel::MVector{3} (optional): The velocity of the kite in the wind reference frame. If not provided, defaults to a zero velocity.
 
-# Returns
-- The function updates the `tether.wind_matrix` in place.
+# Updates (in-place modification):
+- tether.tether_pos::Matrix{Float64}: The positions of the tether's segments in the wind reference frame (3xN matrix, where N is the number of segments).
+- tether.state_vec::MVector{3}: The state vector of the tether, updated with the elevation angle (θ), azimuth angle (φ), and initial tension (Tn).
+    - θ: The initial elevation angle (radians).
+    - φ: The initial azimuth angle (radians).
+    - Tn: The initial tension in the tether (N), computed from the spring constant.
 """
+function init_tether!(tether, kite_pos; kite_vel=nothing)
+    # Assert the correct types
+    @assert isa(tether, Tether) "tether should be a Tether object!"
+    @assert isa(kite_pos, MVector{3}) "kite_pos must be a MVector of size (3,1)"
 
-function update_wind_matrix!(tether::Tether, v_wind_gnd, wind_dir)
-    am = tether.am
-    profile_law = am.set.profile_law
-    cos_wind_dir = cos(wind_dir)
-    sin_wind_dir = sin(wind_dir)
-    
-    for i in 1:tether.set.segments
-        # Calculate wind velocity for this segment
-        height = tether.tether_pos[3, i]
-        if height > 0
-            v_wind = v_wind_gnd * calc_wind_factor(am, height, profile_law)
-        else
-            v_wind = v_wind_gnd
-        end
+    # Set kite velocity if not provided
+    if isnothing(kite_vel)
+        kite_vel = MVector{3}([0.0, 0.0, 0.0])
+    else
+        @assert isa(kite_vel, MVector{3}) "kite_vel must be a MVector of size (3,1)"
+    end
 
-        u = v_wind * cos_wind_dir
-        v = v_wind * sin_wind_dir
+    # Extract tether length and kite position components
+    tether_length = tether.set.l_tether
+    horizontal_pos = kite_pos[1:2]  # horizontal vector (x, y)
+    horizontal_distance = norm(horizontal_pos)  # horizontal distance from origin
+    vertical_pos = kite_pos[3]       # vertical position (z)
 
-        tether.wind_matrix[1, i] = u
-        tether.wind_matrix[2, i] = v
-    end       
+    # Define the nonlinear solver function for catenary
+    function catenary_residual!(residual, coeff, params)
+        tether_length, vertical_pos, horizontal_distance = params
+        residual[] = sqrt(tether_length^2 - vertical_pos^2) - 
+                        (2 * sinh(coeff[] * horizontal_distance / 2) / coeff[])
+    end
+
+    initial_guess = [0.1]  # Initial guess for the catenary coefficient as a scalar in an array
+
+    # Solve the nonlinear problem for the catenary coefficient using Newton's method
+    params = (tether_length, vertical_pos, horizontal_distance)
+    prob = NonlinearProblem(catenary_residual!, initial_guess, params)
+    catenary_coefficient = solve(prob, NewtonRaphson(autodiff=AutoFiniteDiff()), show_trace=Val(false)) 
+    catenary_coeff_val = catenary_coefficient[]  # Extract scalar value from the solution
+
+    # Define the catenary solution based on the horizontal position and coefficient
+    horizontal_positions = LinRange(0, horizontal_distance, tether.set.segments)  
+    azimuth_angle = atan(horizontal_pos[2], horizontal_pos[1]) 
+
+    # Calculate horizontal projection of the catenary curve (XY positions)
+    XY_positions = [sin(azimuth_angle) * horizontal_positions'; cos(azimuth_angle) * horizontal_positions']
+
+    # Calculate x_min and bias for the catenary curve's vertical displacement
+    x_min = -(1 / 2) * (log((tether_length + vertical_pos) / (tether_length - vertical_pos)) /
+                             catenary_coeff_val - horizontal_distance)
+    vertical_bias = -cosh(-x_min * catenary_coeff_val) / catenary_coeff_val    
+
+    # Assign the x, y, and z positions to the tether positions
+    tether.tether_pos[1, :] .= XY_positions[1, :]  # x positions
+    tether.tether_pos[2, :] .= XY_positions[2, :]  # y positions
+    tether.tether_pos[3, :] .= cosh.((horizontal_positions .- x_min) .* catenary_coeff_val) ./
+                                         catenary_coeff_val .+ vertical_bias  # z positions
+
+    # Calculate the azimuth angle (phi) based on kite position
+    azimuth_phi_init = atan(kite_pos[2], kite_pos[1])
+
+    # Calculate the elevation angle (theta) from the tether's position (z, x, y)
+    elevation_theta_init = atan(tether.tether_pos[3, 2],
+                                sqrt(tether.tether_pos[1, 2]^2 + tether.tether_pos[2, 2]^2))
+
+    # Calculate initial tension using the spring constant
+    initial_tension = 2e-4 * tether.set.c_spring
+
+    # Update tether state vector with initial angles and tension
+    tether.state_vec = MVector{3}([elevation_theta_init, azimuth_phi_init, initial_tension]) 
 end
 
 """
-    simulate_tether(state_vec, kite_pos, kite_vel, wind_matrix, l_tether, set)
+    step!(tether, kite_pos, kite_vel, v_wind_gnd, wind_dir; prn=false)
 
-Function to determine the tether shape and forces, based on a quasi-static model.
+Function to compute the new tether configuration and forces based on a quasi-static model, solving the tether dynamics.
 
 # Arguments
-- state_vec::MVector{3, Float64}: state vector (theta [rad], phi [rad], Tn [N]);  
-  tether orientation and tension at ground station
-- kite_pos::MVector{3, Float64}: kite position vector in wind reference frame
-- kite_vel::MVector{3, Float64}: kite velocity vector in wind reference frame
-- wind_matrix:: (3, segments) MMatrix{Float64} wind velocity vector in wind reference frame for each segment of the tether
-- l_tether:: Float64: tether length
-- set:: TetherSettings or Settings: struct containing environmental and tether parameters: see [TetherSettings](@ref)
-                or Settings in KiteUtils.jl
+- tether::Tether: Tether object containing the tether parameters (e.g., state vector, position, velocity, etc.).
+- kite_pos::MVector{3, Float64}: Kite position vector in the wind reference frame (x, y, z) in meters.
+- kite_vel::MVector{3, Float64}: Kite velocity vector in the wind reference frame (vx, vy, vz) in meters per second.
+- v_wind_gnd::Float64: Wind velocity at ground level in the wind reference frame (in m/s).
+- wind_dir::Float64: Wind direction angle (in radians) relative to the reference frame.
+- prn::Bool (optional): A flag to print additional output information, including the number of iterations of the solver. Default is false.
 
 # Returns
-- state_vec::MVector{3, Float64}: state vector (theta [rad], phi [rad], Tn [N]);  
-  tether orientation and tension at ground station 
-- tether_pos::Matrix{Float64}: x,y,z - coordinates of the tether nodes
-- force_gnd::Float64: Line tension at the ground station
-- force_kite::Vector{Float64}: force from the kite to the end of tether
-- p0::Vector{Float64}:  x,y,z - coordinates of the kite-tether attachment
+- state_vec::MVector{3, Float64}: Updated state vector (theta [rad], phi [rad], Tn [N]); tether orientation and tension at the ground station.
+- tether_pos::Matrix{Float64}: x, y, z - coordinates of the tether nodes in 3D space (in meters).
+- force_gnd::Float64: Line tension at the ground station (in Newtons).
+- force_kite::Vector{Float64}: Force vector from the kite to the end of the tether (in Newtons).
+- p0::Vector{Float64}: x, y, z - coordinates of the kite-tether attachment point in 3D space (in meters).
+
+# Function Details
+This function uses a nonlinear solver to calculate the tether's configuration and the forces on it based on the given inputs. It performs the following steps:
+1. Updates the wind velocity matrix using the ground wind speed (`v_wind_gnd`) and the wind direction (`wind_dir`).
+2. Defines the nonlinear problem to solve for the tether's state (orientation and tension) at the ground station.
+3. Solves the nonlinear system using the TrustRegion method.
+4. Updates the tether's state vector and calculates the resulting forces on the tether and kite.
+
+This is used to simulate the tether dynamics in a quasi-static model, considering the wind conditions and the kite's position and velocity.
 """
 function step!(tether, kite_pos, kite_vel, v_wind_gnd, wind_dir; prn=false)
     
@@ -134,7 +180,6 @@ function step!(tether, kite_pos, kite_vel, v_wind_gnd, wind_dir; prn=false)
     res, force_kite, tether.tether_pos, p0 = res!(res, tether.state_vec, param)
 end
 
-
 """
     res!(res, state_vec, param)
 
@@ -145,14 +190,11 @@ and magnitude.
 - res::Vector{Float64} difference between tether end and kite segment
 - state_vec::MVector{3, Float64} state vector (theta [rad], phi [rad], Tn [N]);
   tether orientation and tension at ground station
-- par:: 7-elements tuple:
+- par:: 5-elements tuple:
+    - tether::Tether: tether object
     - kite_pos::MVector{3, Float64} kite position vector in wind reference frame
     - kite_vel::MVector{3, Float64} kite velocity vector in wind reference frame
-    - wind_matrix::MMatrix{Float64} wind velocity vector in wind reference frame for each segment of the tether
-    - l_tether: tether length
-    - set:: TetherSettings struct containing environmental and tether parameters: see [TetherSettings](@ref)
     - buffers:: (5, ) Vector{Matrix{Float64}}  Vector of (3, segments) Matrix{Float64} empty matrices for preallocation
-    - segments:: number of tether segments
     - return_result:: Boolean to determine use for in-place optimization or for calculating returns
 
 # Returns (if return_result==true)
@@ -342,84 +384,44 @@ function res!(res, state_vec, param)
 end
 
 """
-    init_quasistatic(kite_pos, l_tether; kite_vel = nothing, segments = nothing, wind_matrix = nothing, set = nothing)
+    update_wind_matrix!(tether::Tether)
 
-Initialize the quasi-static tether model providing an initial guess for the state vector based on the numerical solution of the catenary equation
+Updates the wind velocity components in the `tether.wind_matrix` for each segment in the tether.
+
+The function computes the wind velocity (`v_wind`) based on the height of each tether segment and 
+adjusts the horizontal wind components (`u` and `v`) based on a given wind direction (`wind_dir`). 
+
+The wind velocity is calculated differently depending on the height of each tether segment:
+- If the height is positive, `v_wind` is computed using the `calc_wind_factor` function,
+    which factors in the tether's properties and wind profile.
+- If the height is zero or negative, the wind velocity is assumed to be constant (`v_wind_gnd`).
 
 # Arguments
-- kite_pos::MVector{3, Float64} kite position vector in wind reference frame
-- l_tether: Float64 tether length
-- kite_vel::MVector{3, Float64} kite velocity vector in wind reference frame
-- segments::Int number of tether segments
-- wind_matrix::MMatrix{3, segments, Float64} wind velocity vector in wind reference frame for each segment of the tether
-- set::TetherSettings or Settings: struct containing environmental and tether parameters: see [TetherSettings](@ref)
-                                        or Settings in KiteUtils.jl
+- `tether::Tether`: A `Tether` object
 
 # Returns
-- state_vec::MVector{3, Float64} state vector (theta [rad], phi [rad], Tn [N])  
-  tether orientation and tension at ground station
+- The function updates the `tether.wind_matrix` in place.
 """
-function init_tether!(tether, kite_pos; kite_vel=nothing)
-    # Assert the correct types
-    @assert isa(tether, Tether) "tether should be a Tether object!"
-    @assert isa(kite_pos, MVector{3}) "kite_pos must be a MVector of size (3,1)"
 
-    # Set kite velocity if not provided
-    if isnothing(kite_vel)
-        kite_vel = MVector{3}([0.0, 0.0, 0.0])
-    else
-        @assert isa(kite_vel, MVector{3}) "kite_vel must be a MVector of size (3,1)"
-    end
+function update_wind_matrix!(tether::Tether, v_wind_gnd, wind_dir)
+    am = tether.am
+    profile_law = am.set.profile_law
+    cos_wind_dir = cos(wind_dir)
+    sin_wind_dir = sin(wind_dir)
+    
+    for i in 1:tether.set.segments
+        # Calculate wind velocity for this segment
+        height = tether.tether_pos[3, i]
+        if height > 0
+            v_wind = v_wind_gnd * calc_wind_factor(am, height, profile_law)
+        else
+            v_wind = v_wind_gnd
+        end
 
-    # Extract tether length and kite position components
-    tether_length = tether.set.l_tether
-    horizontal_pos = kite_pos[1:2]  # horizontal vector (x, y)
-    horizontal_distance = norm(horizontal_pos)  # horizontal distance from origin
-    vertical_pos = kite_pos[3]       # vertical position (z)
+        u = v_wind * cos_wind_dir
+        v = v_wind * sin_wind_dir
 
-    # Define the nonlinear solver function for catenary
-    function catenary_residual!(residual, coeff, params)
-        tether_length, vertical_pos, horizontal_distance = params
-        residual[] = sqrt(tether_length^2 - vertical_pos^2) - 
-                        (2 * sinh(coeff[] * horizontal_distance / 2) / coeff[])
-    end
-
-    initial_guess = [0.1]  # Initial guess for the catenary coefficient as a scalar in an array
-
-    # Solve the nonlinear problem for the catenary coefficient using Newton's method
-    params = (tether_length, vertical_pos, horizontal_distance)
-    prob = NonlinearProblem(catenary_residual!, initial_guess, params)
-    catenary_coefficient = solve(prob, NewtonRaphson(autodiff=AutoFiniteDiff()), show_trace=Val(false)) 
-    catenary_coeff_val = catenary_coefficient[]  # Extract scalar value from the solution
-
-    # Define the catenary solution based on the horizontal position and coefficient
-    horizontal_positions = LinRange(0, horizontal_distance, tether.set.segments)  
-    azimuth_angle = atan(horizontal_pos[2], horizontal_pos[1]) 
-
-    # Calculate horizontal projection of the catenary curve (XY positions)
-    XY_positions = [sin(azimuth_angle) * horizontal_positions'; cos(azimuth_angle) * horizontal_positions']
-
-    # Calculate x_min and bias for the catenary curve's vertical displacement
-    x_min = -(1 / 2) * (log((tether_length + vertical_pos) / (tether_length - vertical_pos)) /
-                             catenary_coeff_val - horizontal_distance)
-    vertical_bias = -cosh(-x_min * catenary_coeff_val) / catenary_coeff_val    
-
-    # Assign the x, y, and z positions to the tether positions
-    tether.tether_pos[1, :] .= XY_positions[1, :]  # x positions
-    tether.tether_pos[2, :] .= XY_positions[2, :]  # y positions
-    tether.tether_pos[3, :] .= cosh.((horizontal_positions .- x_min) .* catenary_coeff_val) ./
-                                         catenary_coeff_val .+ vertical_bias  # z positions
-
-    # Calculate the azimuth angle (phi) based on kite position
-    azimuth_phi_init = atan(kite_pos[2], kite_pos[1])
-
-    # Calculate the elevation angle (theta) from the tether's position (z, x, y)
-    elevation_theta_init = atan(tether.tether_pos[3, 2],
-                                sqrt(tether.tether_pos[1, 2]^2 + tether.tether_pos[2, 2]^2))
-
-    # Calculate initial tension using the spring constant
-    initial_tension = 2e-4 * tether.set.c_spring
-
-    # Update tether state vector with initial angles and tension
-    tether.state_vec = MVector{3}([elevation_theta_init, azimuth_phi_init, initial_tension]) 
+        tether.wind_matrix[1, i] = u
+        tether.wind_matrix[2, i] = v
+    end       
 end
