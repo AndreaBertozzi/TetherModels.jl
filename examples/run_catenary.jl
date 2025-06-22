@@ -19,7 +19,7 @@ settings.segments = 20
 # Create atmospheric model using AtmosphericModels
 am = AtmosphericModel()
 
-# Define tether object and initialise with analytic catenary shape
+# Define tether object and initialize with analytic catenary shape
 tether = Tether(settings, am)
 init_tether!(tether, kite_pos; kite_vel)
 
