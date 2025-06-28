@@ -83,7 +83,15 @@ function init_tether!(tether::Tether)
         # Calculate initial tension using the spring constant
         initial_tension = (d-tether_length) * tether.set.c_spring
         # Update tether state vector with initial angles and tension
-        tether.state_vec = MVector{3}([elevation_theta_init, azimuth_phi_init, initial_tension]) 
+        tether.state_vec = MVec3([elevation_theta_init, azimuth_phi_init, initial_tension]) 
+
+        frac = 0.
+        pos = kite_pos
+        for i in tether.set.segments:-1:1
+            frac = (1 - i / (tether.set.segments + 1))
+            pos = frac * kite_pos
+            tether.tether_pos[:, i] = pos    
+        end
 
     else        
         # Extract tether length and kite position components
@@ -111,7 +119,7 @@ function init_tether!(tether::Tether)
         azimuth_angle = atan(horizontal_pos[2], horizontal_pos[1]) 
 
         # Calculate horizontal projection of the catenary curve (XY positions)
-        XY_positions = [sin(azimuth_angle) * horizontal_positions'; cos(azimuth_angle) * horizontal_positions']
+        XY_positions = [cos(azimuth_angle) * horizontal_positions'; sin(azimuth_angle) * horizontal_positions']
 
         # Calculate x_min and bias for the catenary curve's vertical displacement
         x_min = -(1 / 2) * (log((tether_length + vertical_pos) / (tether_length - vertical_pos)) /
@@ -119,10 +127,10 @@ function init_tether!(tether::Tether)
         vertical_bias = -cosh(-x_min * catenary_coeff_val) / catenary_coeff_val    
 
         # Assign the x, y, and z positions to the tether positions
-        tether.tether_pos[1, :] .= XY_positions[1, :]  # x positions
-        tether.tether_pos[2, :] .= XY_positions[2, :]  # y positions
-        tether.tether_pos[3, :] .= cosh.((horizontal_positions .- x_min) .* catenary_coeff_val) ./
-                                            catenary_coeff_val .+ vertical_bias  # z positions
+        tether.tether_pos[1, :] .= reverse(XY_positions[1, :])  # x positions
+        tether.tether_pos[2, :] .= reverse(XY_positions[2, :])  # y positions
+        tether.tether_pos[3, :] .= reverse(cosh.((horizontal_positions .- x_min) .* catenary_coeff_val) ./
+                                            catenary_coeff_val .+ vertical_bias) # z positions
 
         # Calculate the azimuth angle (phi) based on kite position
         azimuth_phi_init = atan(kite_pos[2], kite_pos[1])
@@ -375,7 +383,7 @@ function res!(res, state_vec, param)
         end
     end
 
-    # Final ground connection calculations
+    # Final kite connection calculations
     T0_1 = 1.5mj*aj[1,1] + FT[1,1] - Fd[1,1]
     T0_2 = 1.5mj*aj[2,1] + FT[2,1] - Fd[2,1]
     T0_3 = 1.5mj*aj[3,1] + FT[3,1] - Fd[3,1] + 1.5mj*g
