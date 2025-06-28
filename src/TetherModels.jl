@@ -42,7 +42,7 @@ function Tether(set::Settings, am::AtmosphericModel;
 end
 
 """
-    init_tether!(tether, kite_pos; kite_vel=nothing)
+    init_tether!(tether::Tether)
 
 Initializes the tether system by computing the catenary shape of the tether based on the kite's position 
 and updating the tether's state, including its position, angles, and initial tension.
