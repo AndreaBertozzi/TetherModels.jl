@@ -1,16 +1,13 @@
 using ControlPlots, TetherModels, StaticArrays, LinearAlgebra, KiteUtils, AtmosphericModels
 
-
 # Set wind speed and direction
-v_wind_gnd = 2.0
+v_wind_gnd = 0.0
 wind_dir = pi/4
 
 # Load settings using KiteUtils
 set_data_path("data")
 settings = load_settings("system.yaml")
 
-settings.azimuth = 0.1
-settings.kite_distance = 40 
 # Calculate kite position and velocity from settings
 d = settings.kite_distance
 ct = cos(settings.elevation)
