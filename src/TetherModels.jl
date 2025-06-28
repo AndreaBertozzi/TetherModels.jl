@@ -49,8 +49,6 @@ and updating the tether's state, including its position, angles, and initial ten
 
 # Arguments
 - tether::Tether: A Tether object that contains the settings, state, and position of the tether.
-- kite_pos::MVector{3}: The position of the kite in the wind reference frame as a 3D vector (x, y, z).
-- kite_vel::MVector{3} (optional): The velocity of the kite in the wind reference frame. If not provided, defaults to a zero velocity.
 
 # Updates (in-place modification):
 - tether.tether_pos::Matrix{Float64}: The positions of the tether's segments in the wind reference frame (3xN matrix, where N is the number of segments).
@@ -59,69 +57,86 @@ and updating the tether's state, including its position, angles, and initial ten
     - φ: The initial azimuth angle (radians).
     - Tn: The initial tension in the tether (N), computed from the spring constant.
 """
-function init_tether!(tether, kite_pos; kite_vel=nothing)
+function init_tether!(tether::Tether)
     # Assert the correct types
     @assert isa(tether, Tether) "tether should be a Tether object!"
-    @assert isa(kite_pos, MVector{3}) "kite_pos must be a MVector of size (3,1)"
+    
+    # Calculate kite position and velocity from settings
+    d = tether.set.kite_distance
+    ct = cos(tether.set.elevation)
+    st = sin(tether.set.elevation)
+    cp = cos(tether.set.azimuth)
+    sp = sin(tether.set.azimuth)
 
-    # Set kite velocity if not provided
-    if isnothing(kite_vel)
-        kite_vel = MVector{3}([0.0, 0.0, 0.0])
-    else
-        @assert isa(kite_vel, MVector{3}) "kite_vel must be a MVector of size (3,1)"
-    end
+    kite_pos = MVec3([d * ct * cp,
+                        d * ct * sp,
+                        d * st])
 
-    # Extract tether length and kite position components
     tether_length = tether.set.l_tether
-    horizontal_pos = kite_pos[1:2]  # horizontal vector (x, y)
-    horizontal_distance = norm(horizontal_pos)  # horizontal distance from origin
-    vertical_pos = kite_pos[3]       # vertical position (z)
 
-    # Define the nonlinear solver function for catenary
-    function catenary_residual!(residual, coeff, params)
-        tether_length, vertical_pos, horizontal_distance = params
-        residual[] = sqrt(tether_length^2 - vertical_pos^2) - 
-                        (2 * sinh(coeff[] * horizontal_distance / 2) / coeff[])
+    if d >= tether_length
+        # Calculate the azimuth angle (phi) based on kite position
+        azimuth_phi_init = atan(kite_pos[2], kite_pos[1])
+        # Calculate the elevation angle (theta) from the tether's position (z, x, y)
+        elevation_theta_init = atan(kite_pos[3],
+                                    sqrt(kite_pos[1]^2 + kite_pos[2]^2))
+        # Calculate initial tension using the spring constant
+        initial_tension = (d-tether_length) * tether.set.c_spring
+        # Update tether state vector with initial angles and tension
+        tether.state_vec = MVector{3}([elevation_theta_init, azimuth_phi_init, initial_tension]) 
+
+    else        
+        # Extract tether length and kite position components
+        horizontal_pos = kite_pos[1:2]  # horizontal vector (x, y)
+        horizontal_distance = norm(horizontal_pos)  # horizontal distance from origin
+        vertical_pos = kite_pos[3]       # vertical position (z)
+
+        # Define the nonlinear solver function for catenary
+        function catenary_residual!(residual, coeff, params)
+            tether_length, vertical_pos, horizontal_distance = params
+            residual[] = sqrt(tether_length^2 - vertical_pos^2) - 
+                            (2 * sinh(coeff[] * horizontal_distance / 2) / coeff[])
+        end
+
+        initial_guess = [0.1]  # Initial guess for the catenary coefficient as a scalar in an array
+
+        # Solve the nonlinear problem for the catenary coefficient using Newton's method
+        params = (tether_length, vertical_pos, horizontal_distance)
+        prob = NonlinearProblem(catenary_residual!, initial_guess, params)
+        catenary_coefficient = solve(prob, NewtonRaphson(autodiff=AutoFiniteDiff()), show_trace=Val(false)) 
+        catenary_coeff_val = catenary_coefficient[]  # Extract scalar value from the solution
+
+        # Define the catenary solution based on the horizontal position and coefficient
+        horizontal_positions = LinRange(0, horizontal_distance, tether.set.segments)  
+        azimuth_angle = atan(horizontal_pos[2], horizontal_pos[1]) 
+
+        # Calculate horizontal projection of the catenary curve (XY positions)
+        XY_positions = [sin(azimuth_angle) * horizontal_positions'; cos(azimuth_angle) * horizontal_positions']
+
+        # Calculate x_min and bias for the catenary curve's vertical displacement
+        x_min = -(1 / 2) * (log((tether_length + vertical_pos) / (tether_length - vertical_pos)) /
+                                catenary_coeff_val - horizontal_distance)
+        vertical_bias = -cosh(-x_min * catenary_coeff_val) / catenary_coeff_val    
+
+        # Assign the x, y, and z positions to the tether positions
+        tether.tether_pos[1, :] .= XY_positions[1, :]  # x positions
+        tether.tether_pos[2, :] .= XY_positions[2, :]  # y positions
+        tether.tether_pos[3, :] .= cosh.((horizontal_positions .- x_min) .* catenary_coeff_val) ./
+                                            catenary_coeff_val .+ vertical_bias  # z positions
+
+        # Calculate the azimuth angle (phi) based on kite position
+        azimuth_phi_init = atan(kite_pos[2], kite_pos[1])
+
+        # Calculate the elevation angle (theta) from the tether's position (z, x, y)
+        elevation_theta_init = atan(tether.tether_pos[3, 2],
+                                    sqrt(tether.tether_pos[1, 2]^2 + tether.tether_pos[2, 2]^2))
+
+        # Calculate initial tension using the spring constant
+        initial_tension = 2e-4 * tether.set.c_spring
+
+        # Update tether state vector with initial angles and tension
+        tether.state_vec = MVector{3}([elevation_theta_init, azimuth_phi_init, initial_tension]) 
     end
-
-    initial_guess = [0.1]  # Initial guess for the catenary coefficient as a scalar in an array
-
-    # Solve the nonlinear problem for the catenary coefficient using Newton's method
-    params = (tether_length, vertical_pos, horizontal_distance)
-    prob = NonlinearProblem(catenary_residual!, initial_guess, params)
-    catenary_coefficient = solve(prob, NewtonRaphson(autodiff=AutoFiniteDiff()), show_trace=Val(false)) 
-    catenary_coeff_val = catenary_coefficient[]  # Extract scalar value from the solution
-
-    # Define the catenary solution based on the horizontal position and coefficient
-    horizontal_positions = LinRange(0, horizontal_distance, tether.set.segments)  
-    azimuth_angle = atan(horizontal_pos[2], horizontal_pos[1]) 
-
-    # Calculate horizontal projection of the catenary curve (XY positions)
-    XY_positions = [sin(azimuth_angle) * horizontal_positions'; cos(azimuth_angle) * horizontal_positions']
-
-    # Calculate x_min and bias for the catenary curve's vertical displacement
-    x_min = -(1 / 2) * (log((tether_length + vertical_pos) / (tether_length - vertical_pos)) /
-                             catenary_coeff_val - horizontal_distance)
-    vertical_bias = -cosh(-x_min * catenary_coeff_val) / catenary_coeff_val    
-
-    # Assign the x, y, and z positions to the tether positions
-    tether.tether_pos[1, :] .= XY_positions[1, :]  # x positions
-    tether.tether_pos[2, :] .= XY_positions[2, :]  # y positions
-    tether.tether_pos[3, :] .= cosh.((horizontal_positions .- x_min) .* catenary_coeff_val) ./
-                                         catenary_coeff_val .+ vertical_bias  # z positions
-
-    # Calculate the azimuth angle (phi) based on kite position
-    azimuth_phi_init = atan(kite_pos[2], kite_pos[1])
-
-    # Calculate the elevation angle (theta) from the tether's position (z, x, y)
-    elevation_theta_init = atan(tether.tether_pos[3, 2],
-                                sqrt(tether.tether_pos[1, 2]^2 + tether.tether_pos[2, 2]^2))
-
-    # Calculate initial tension using the spring constant
-    initial_tension = 2e-4 * tether.set.c_spring
-
-    # Update tether state vector with initial angles and tension
-    tether.state_vec = MVector{3}([elevation_theta_init, azimuth_phi_init, initial_tension]) 
 end
 
 """
