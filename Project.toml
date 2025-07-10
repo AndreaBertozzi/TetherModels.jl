@@ -5,6 +5,7 @@ version = "1.0.0-DEV"
 
 [deps]
 ADTypes = "47edcb42-4c32-4615-8424-f2b9edc5f35b"
+AtmosphericModels = "c59cac55-771d-4f45-b14d-1c681463a295"
 ControlPlots = "23c2ee80-7a9e-4350-b264-8e670f12517c"
 KiteUtils = "90980105-b163-44e5-ba9f-8b1c83bb0533"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
@@ -14,7 +15,7 @@ Parameters = "d96e819e-fc66-5662-9728-84c9c7592b0a"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 
 [compat]
-KiteUtils = "0.10.9"
+KiteUtils = "0.10.12"
 julia = "1.10, 1.11"
 
 [extras]

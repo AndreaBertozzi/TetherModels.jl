@@ -1,31 +1,47 @@
-using ControlPlots, TetherModels, StaticArrays, LinearAlgebra, KiteUtils
+using ControlPlots, TetherModels, StaticArrays, LinearAlgebra, KiteUtils, AtmosphericModels
 
-# Set initial conditions
-kite_pos = MVector{3}([100.0, 100, 800])
-tether_length = norm(kite_pos)*1.05
+# Set wind speed and direction
+v_wind_gnd = 0.0
+wind_dir = pi/4
 
+# Load settings using KiteUtils
 set_data_path("data")
 settings = load_settings("system.yaml")
 
-state_vec, kite_pos, kite_vel, wind_vel, tether_length, settings = init_quasistatic(kite_pos, tether_length, segments = 22, settings=settings)
-state_vec, tether_pos, Ft_ground, Ft_kite, p0 =  simulate_tether(state_vec, kite_pos, kite_vel, wind_vel, tether_length, settings)
+# Calculate kite position and velocity from settings
+d = settings.kite_distance
+ct = cos(settings.elevation)
+st = sin(settings.elevation)
+cp = cos(settings.azimuth)
+sp = sin(settings.azimuth)
 
+kite_pos = MVector{3}([d * ct * cp,
+                    d * ct * sp,                    
+                    d * st])
 
-x_qs = vec(sqrt.(tether_pos[1,:].^2 + tether_pos[2,:].^2))
-y_qs = vec(tether_pos[3,:])
+kite_vel = MVector{3}([0., 0., 0.])
 
+# Change some default settings
+settings.segments = 20
 
-tether_pos = hcat(p0, tether_pos, [0; 0; 0])
+# Create atmospheric model using AtmosphericModels
+am = AtmosphericModel()
+
+# Define tether object and initialize with analytic catenary shape
+tether = Tether(settings, am)
+init_tether!(tether)
+
+# Plot initial condition of catenary
 plt.figure("3D view").add_subplot(projection="3d").set_aspect("equal")
-plt.plot3D(tether_pos[1,:], tether_pos[2,:], tether_pos[3,:], marker = "o")
+plt.plot3D(tether.tether_pos[1,:], tether.tether_pos[2,:], tether.tether_pos[3,:], marker = "+")
+
+# Run model iteration 
+step!(tether, kite_pos, kite_vel, v_wind_gnd, wind_dir; prn=false)
+
+# Plot model after iteration
+plt.plot3D(tether.tether_pos[1,:], tether.tether_pos[2,:], tether.tether_pos[3,:], marker = "o")
 plt.scatter3D(0, 0, 0,  s = 200, marker = "s", c = "C7")
-plt.scatter3D(p0[1], p0[2], p0[3], s = 50, marker = "D", c = "g")
 plt.xlabel("X [m]")
 plt.ylabel("Y [m]")
-plt.xlim(0, 100)
-plt.ylim(0, 100)
-plt.zlim(0, 800)
-
-plt.legend(["Tether", "Origin", "Kite"])
 plt.show()
 
