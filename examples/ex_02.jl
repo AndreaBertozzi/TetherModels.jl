@@ -34,7 +34,7 @@ kite_pos = kite_pos_from_settings(set)
 kite_vel = MVector{3}([0., 0., 0.])
 
 # Create atmospheric model
-am = AtmosphericModel()
+am = AtmosphericModel(set)
 # Set zero wind
 v_wind_gnd= 0.
 wind_dir = 0.
