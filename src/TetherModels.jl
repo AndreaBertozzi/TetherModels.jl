@@ -115,7 +115,7 @@ function init_tether!(tether::Tether)
         catenary_coeff_val = catenary_coefficient[]  # Extract scalar value from the solution
 
         # Define the catenary solution based on the horizontal position and coefficient
-        horizontal_positions = LinRange(0, horizontal_distance, tether.set.segments)  
+        horizontal_positions = LinRange(0, horizontal_distance, tether.set.segments+2)  
         azimuth_angle = atan(horizontal_pos[2], horizontal_pos[1]) 
 
         # Calculate horizontal projection of the catenary curve (XY positions)
@@ -127,9 +127,9 @@ function init_tether!(tether::Tether)
         vertical_bias = -cosh(-x_min * catenary_coeff_val) / catenary_coeff_val    
 
         # Assign the x, y, and z positions to the tether positions
-        tether.tether_pos[1, :] .= reverse(XY_positions[1, :])  # x positions
-        tether.tether_pos[2, :] .= reverse(XY_positions[2, :])  # y positions
-        tether.tether_pos[3, :] .= reverse(cosh.((horizontal_positions .- x_min) .* catenary_coeff_val) ./
+        tether.tether_pos[1, :] .= reverse(XY_positions[1, 2:end-1])  # x positions
+        tether.tether_pos[2, :] .= reverse(XY_positions[2, 2:end-1])  # y positions
+        tether.tether_pos[3, :] .= reverse(cosh.((horizontal_positions[2:end-1] .- x_min) .* catenary_coeff_val) ./
                                             catenary_coeff_val .+ vertical_bias) # z positions
 
         # Calculate the azimuth angle (phi) based on kite position
