@@ -38,7 +38,7 @@ end
 
 function Tether(set::Settings, am::AtmosphericModel;
                 state_vec::MVec3 = MVector{3}(0.0, 0.0, 0.0))
-    Tether{set.segments}(set, am; state_vec)
+    Tether{set.segments-1}(set, am; state_vec)
 end
 
 """
@@ -87,8 +87,8 @@ function init_tether!(tether::Tether)
 
         frac = 0.
         pos = kite_pos
-        for i in tether.set.segments:-1:1
-            frac = (1 - i / (tether.set.segments + 1))
+        for i in tether.set.segments-1:-1:1
+            frac = (1 - i / tether.set.segments)
             pos = frac * kite_pos
             tether.tether_pos[:, i] = pos    
         end
@@ -115,7 +115,7 @@ function init_tether!(tether::Tether)
         catenary_coeff_val = catenary_coefficient[]  # Extract scalar value from the solution
 
         # Define the catenary solution based on the horizontal position and coefficient
-        horizontal_positions = LinRange(0, horizontal_distance, tether.set.segments)  
+        horizontal_positions = LinRange(0, horizontal_distance, tether.set.segments+1)  
         azimuth_angle = atan(horizontal_pos[2], horizontal_pos[1]) 
 
         # Calculate horizontal projection of the catenary curve (XY positions)
@@ -127,9 +127,9 @@ function init_tether!(tether::Tether)
         vertical_bias = -cosh(-x_min * catenary_coeff_val) / catenary_coeff_val    
 
         # Assign the x, y, and z positions to the tether positions
-        tether.tether_pos[1, :] .= reverse(XY_positions[1, :])  # x positions
-        tether.tether_pos[2, :] .= reverse(XY_positions[2, :])  # y positions
-        tether.tether_pos[3, :] .= reverse(cosh.((horizontal_positions .- x_min) .* catenary_coeff_val) ./
+        tether.tether_pos[1, :] .= reverse(XY_positions[1, 2:end-1])  # x positions
+        tether.tether_pos[2, :] .= reverse(XY_positions[2, 2:end-1])  # y positions
+        tether.tether_pos[3, :] .= reverse(cosh.((horizontal_positions[2:end-1] .- x_min) .* catenary_coeff_val) ./
                                             catenary_coeff_val .+ vertical_bias) # z positions
 
         # Calculate the azimuth angle (phi) based on kite position
@@ -179,9 +179,9 @@ This is used to simulate the tether dynamics in a quasi-static model, considerin
 function step!(tether, kite_pos, kite_vel, v_wind_gnd, wind_dir; prn=false)
     
     segments = tether.set.segments
-    buffers= [MMatrix{3, segments}(zeros(3, segments)), MMatrix{3, segments}(zeros(3, segments)),
-              MMatrix{3, segments}(zeros(3, segments)), MMatrix{3, segments}(zeros(3, segments)),
-              MMatrix{3, segments}(zeros(3, segments))]
+    buffers= [MMatrix{3, segments - 1}(zeros(3, segments - 1)), MMatrix{3, segments - 1}(zeros(3, segments - 1)),
+              MMatrix{3, segments - 1}(zeros(3, segments - 1)), MMatrix{3, segments - 1}(zeros(3, segments - 1)),
+              MMatrix{3, segments - 1}(zeros(3, segments - 1))]
     
     update_wind_matrix!(tether, v_wind_gnd, wind_dir)
     # Pack parameters in param named tuple - false sets res! for in-place solution
@@ -242,7 +242,7 @@ function res!(res, state_vec, param)
 
     g = abs(GRAV_ACC[3])
 
-    Ls = set.l_tether / (segments + 1)
+    Ls = set.l_tether / segments
     A = π/4 * (set.d_tether/1000)^2
     mj = set.rho_tether * Ls * A
     E = set.c_spring / A
@@ -267,31 +267,31 @@ function res!(res, state_vec, param)
     v_parallel = dot(kite_vel, p_unit)
     
     # First element calculations
-    FT[1, segments] = Tn * cosθ * cosφ # cos(elevation)cos(azimuth)
-    FT[2, segments] = Tn * cosθ * sinφ # cos(elevation)sin(azimuth)
-    FT[3, segments] = Tn * sinθ        # sin(elevation)
+    FT[1, segments-1] = Tn * cosθ * cosφ # cos(elevation)cos(azimuth)
+    FT[2, segments-1] = Tn * cosθ * sinφ # cos(elevation)sin(azimuth)
+    FT[3, segments-1] = Tn * sinθ        # sin(elevation)
 
-    pj[1, segments] = Ls * cosθ * cosφ
-    pj[2, segments] = Ls * cosθ * sinφ
-    pj[3, segments] = Ls * sinθ
+    pj[1, segments-1] = Ls * cosθ * cosφ
+    pj[2, segments-1] = Ls * cosθ * sinφ
+    pj[3, segments-1] = Ls * sinθ
 
     # Velocity and acceleration calculations
     ω = cross(kite_pos / norm_p^2, kite_vel)
-    a = cross(ω, SVec3(pj[:, segments]))         
-    b = cross(ω, cross(ω, SVec3(pj[:, segments])))
-    vj[:, segments] .= v_parallel * p_unit + a
-    aj[:, segments] .= b
+    a = cross(ω, SVec3(pj[:, segments-1]))         
+    b = cross(ω, cross(ω, SVec3(pj[:, segments-1])))
+    vj[:, segments-1] .= v_parallel * p_unit + a
+    aj[:, segments-1] .= b
 
     # Drag calculation for first element
-    v_a_p1 = vj[1, segments] - tether.wind_matrix[1, segments]
-    v_a_p2 = vj[2, segments] - tether.wind_matrix[2, segments]
-    v_a_p3 = vj[3, segments] - tether.wind_matrix[3, segments]
+    v_a_p1 = vj[1, segments-1] - tether.wind_matrix[1, segments-1]
+    v_a_p2 = vj[2, segments-1] - tether.wind_matrix[2, segments-1]
+    v_a_p3 = vj[3, segments-1] - tether.wind_matrix[3, segments-1]
 
     if all(x -> abs(x) < 1e-3, (v_a_p1, v_a_p2, v_a_p3))
-        Fd[:, segments] .= 0.0
+        Fd[:, segments-1] .= 0.0
     else
-        dir1, dir2, dir3 = pj[1, segments]/Ls, pj[2, segments]/Ls,
-                     pj[3, segments]/Ls
+        dir1, dir2, dir3 = pj[1, segments-1]/Ls, pj[2, segments-1]/Ls,
+                     pj[3, segments-1]/Ls
 
         v_dot_dir = v_a_p1*dir1 + v_a_p2*dir2 + v_a_p3*dir3
         v_a_p_t1 = v_dot_dir * dir1
@@ -306,15 +306,15 @@ function res!(res, state_vec, param)
         drag_coeff = -0.5 * set.rho_0 * Ls * set.d_tether * set.cd_tether
         coeff = drag_coeff * norm_v_a_p_n
 
-        Fd[1, segments] = coeff * v_a_p_n1
-        Fd[2, segments] = coeff * v_a_p_n2
-        Fd[3, segments] = coeff * v_a_p_n3
+        Fd[1, segments-1] = coeff * v_a_p_n1
+        Fd[2, segments-1] = coeff * v_a_p_n2
+        Fd[3, segments-1] = coeff * v_a_p_n3
     end
 
     # Process other segments
-    @inbounds for ii in segments:-1:2
+    @inbounds for ii in segments-1:-1:2
         # Tension force calculations
-        if ii == segments
+        if ii == segments-1
             mj_total = 1.5mj
             g_term = mj_total * g
         else
@@ -432,7 +432,7 @@ function update_wind_matrix!(tether::Tether, v_wind_gnd, wind_dir)
     cos_wind_dir = cos(wind_dir)
     sin_wind_dir = sin(wind_dir)
     
-    for i in 1:tether.set.segments
+    for i in 1:tether.set.segments-1
         # Calculate wind velocity for this segment
         height = tether.tether_pos[3, i]
         if height > 0
